@@ -1,13 +1,15 @@
-"""Zendure Integration device."""
+"""Zendure HA-GP013 device."""
 
 from __future__ import annotations
 
 import asyncio
 import json
 import logging
+import re
 import traceback
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from time import monotonic
 from typing import Any
 
 from aiohttp import ClientTimeout
@@ -21,23 +23,27 @@ except ImportError:
 
 from homeassistant.components import bluetooth, persistent_notification
 from homeassistant.components.number import NumberMode
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.util import dt as dt_util
 from paho.mqtt import client as mqtt_client
 
 from .binary_sensor import ZendureBinarySensor
 from .button import ZendureButton
-from .const import DeviceState, SmartMode
-from .entity import EntityDevice, EntityZendure
-from .number import ZendureNumber
+from .const import DOMAIN, DeviceState, Flash, Http, SmartMode
+from .entity import POWER_DEADBAND, EntityDevice, EntityZendure, quiet
+from .number import ZendureNumber, ZendureRestoreNumber
 from .select import ZendureRestoreSelect, ZendureSelect
 from .sensor import ZendureRestoreSensor, ZendureSensor
+from .slew import DEFAULT_DOWN, DEFAULT_FLIP_DELAY, DEFAULT_MIN_RUN, DEFAULT_READY_UP, DEFAULT_UP, ZERO_BAND, SlewLimiter
 
 _LOGGER = logging.getLogger(__name__)
 
 CONST_HEADER = {"content-type": "application/json; charset=UTF-8"}
-CONST_TIMEOUT = ClientTimeout(total=2)
+CONST_TIMEOUT = ClientTimeout(total=Http.TIMEOUT)
+HTTP_OK = 200
 SF_COMMAND_CHAR = "0000c304-0000-1000-8000-00805f9b34fb"
 
 
@@ -123,7 +129,7 @@ class ZendureDevice(EntityDevice):
 
         self.mqtt: mqtt_client.Client | None = None
         self.zendure: mqtt_client.Client | None = None
-        self.ipAddress = definition.get("ip", "") if definition.get("ip", "") != "" else f"zendure-{definition['productModel'].replace(' ', '')}-{self.snNumber}.local"
+        self.ipAddress = definition.get("ip", "") if definition.get("ip", "") != "" else self.default_hostname(definition["productModel"], self.snNumber)
 
         self.topic_read = f"iot/{self.prodkey}/{self.deviceId}/properties/read"
         self.topic_write = f"iot/{self.prodkey}/{self.deviceId}/properties/write"
@@ -146,12 +152,39 @@ class ZendureDevice(EntityDevice):
         self.actualKwh: float = 0.0
         self.state: DeviceState = DeviceState.OFFLINE
         self.exports_bypass: bool = True
+        self.slew = SlewLimiter()
+        self._slew_base: tuple[float, float, float, float, float] = (DEFAULT_UP, DEFAULT_DOWN, DEFAULT_FLIP_DELAY, DEFAULT_MIN_RUN, DEFAULT_READY_UP)
+        self._lastMessageUpdate = datetime.min
+
+        # flash / RAM protection of the device
+        self._reported: dict[str, Any] = {}  # last value reported by the device per property
+        self._writes: dict[str, tuple[Any, float]] = {}  # property -> (last value written, time) for duplicate detection
+        self._deferred: dict[str, tuple[EntityZendure, Any]] = {}  # persistent writes waiting for their rate limit window
+        self._deferred_handle: asyncio.TimerHandle | None = None
+        self.persist_safe_state = True  # allow the one-time write of the safe 0 W state to the flash
+        self.flash_count = 0  # number of writes that reached the flash of the device (this session)
+        self._flash_safe: bool | None = None  # True: the flash holds the safe 0 W state
+        self._flash_last = -Flash.MIN_INTERVAL  # monotonic time of the last automatic flash write
+        self._idle_since: float | None = None
+        self._off_sent = False  # power_off was sent and nothing was commanded since
 
         self.create_entities()
 
+    @staticmethod
+    def default_hostname(product_model: str, sn: str) -> str:
+        """Build the mDNS hostname used when the cloud does not report an IP address.
+
+        Only letters, digits and hyphens are valid in a DNS label, so characters such as the
+        '+' in 'SolarFlow 2400 AC+' are dropped; otherwise every lookup fails with
+        'Misformatted domain name'.
+        """
+        model = re.sub(r"[^A-Za-z0-9-]", "", product_model)
+        serial = re.sub(r"[^A-Za-z0-9-]", "", sn)
+        return f"zendure-{model}-{serial}.local"
+
     def create_entities(self) -> None:
         """Create the device entities."""
-        self.limitOutput = ZendureNumber(self, "outputLimit", self.entityWrite, None, "W", "power", self.discharge_limit, 0, NumberMode.SLIDER)
+        self.limitOutput =ZendureNumber(self, "outputLimit", self.entityWrite, None, "W", "power", self.discharge_limit, 0, NumberMode.SLIDER)
         self.limitInput = ZendureNumber(self, "inputLimit", self.entityWrite, None, "W", "power", self.charge_limit, 0, NumberMode.SLIDER)
         self.minSoc = ZendureNumber(self, "minSoc", self.entityWrite, None, "%", "soc", 100, 0, NumberMode.SLIDER, 10)
         self.socSet = ZendureNumber(self, "socSet", self.entityWrite, None, "%", "soc", 100, 0, NumberMode.SLIDER, 10)
@@ -175,11 +208,11 @@ class ZendureDevice(EntityDevice):
         self.acMode = ZendureSelect(self, "acMode", {1: "input", 2: "output"}, self.entityWrite, 1)
         self.electricLevel = ZendureSensor(self, "electricLevel", None, "%", "battery", "measurement")
         # set homeInput to 0 for devices, which have no AC charge capability
-        self.homeInput = ZendureSensor(self, "gridInputPower", None, "W", "power", "measurement", state = 0)
-        self.solarInput = ZendureSensor(self, "solarInputPower", None, "W", "power", "measurement", icon="mdi:solar-panel")
-        self.batteryInput = ZendureSensor(self, "outputPackPower", None, "W", "power", "measurement")
-        self.batteryOutput = ZendureSensor(self, "packInputPower", None, "W", "power", "measurement")
-        self.homeOutput = ZendureSensor(self, "outputHomePower", None, "W", "power", "measurement")
+        self.homeInput = ZendureSensor(self, "gridInputPower", None, "W", "power", "measurement", state=0, deadband=POWER_DEADBAND)
+        self.solarInput = ZendureSensor(self, "solarInputPower", None, "W", "power", "measurement", icon="mdi:solar-panel", deadband=POWER_DEADBAND)
+        self.batteryInput = ZendureSensor(self, "outputPackPower", None, "W", "power", "measurement", deadband=POWER_DEADBAND)
+        self.batteryOutput = ZendureSensor(self, "packInputPower", None, "W", "power", "measurement", deadband=POWER_DEADBAND)
+        self.homeOutput = ZendureSensor(self, "outputHomePower", None, "W", "power", "measurement", deadband=POWER_DEADBAND)
         self.batInOut = ZendureSensor(self, "batInOut", None, "W", "power", "measurement", 0)
         self.heatState = ZendureBinarySensor(self, "heatState")
         self.hemsState = ZendureBinarySensor(self, "hemsState")
@@ -200,6 +233,21 @@ class ZendureDevice(EntityDevice):
         self.aggrHomeOut = ZendureRestoreSensor(self, "aggrOutputHome", None, "kWh", "energy", "total_increasing", 2)
         self.aggrSolar = ZendureRestoreSensor(self, "aggrSolar", None, "kWh", "energy", "total_increasing", 2)
         self.aggrSwitchCount = ZendureRestoreSensor(self, "switchCount", None, None, None, "total_increasing", 0)
+
+        # diagnostics
+        diag = EntityCategory.DIAGNOSTIC
+        self.lastMessage = ZendureSensor(self, "lastMessage", None, None, "timestamp", None, category=diag)
+        self.commandPower = ZendureSensor(self, "commandPower", None, "W", "power", "measurement", 0, state=0, category=diag)
+        self.commandCount = ZendureSensor(self, "commandCount", None, None, None, "total_increasing", 0, state=0, category=diag)
+        self.slewActive = ZendureBinarySensor(self, "slewActive", None, None, category=diag)
+        self.flashWrites = ZendureSensor(self, "flashWrites", None, None, None, "total_increasing", 0, state=0, category=diag)
+        # high frequency diagnostics are disabled by default: every state change is a row in the recorder database
+        quiet(self.lastMessage, self.commandPower, self.commandCount)
+
+        # per device scaling of the slew rate (100 % = the global setting)
+        self.slewFactor = ZendureRestoreNumber(self, "slewFactor", self._slew_factor_changed, None, "%", None, 300, 10, NumberMode.BOX, True)
+        self.slewFactor._attr_native_value = 100
+        self.slewFactor._attr_entity_category = EntityCategory.CONFIG
 
     def setLimits(self, charge: int, discharge: int) -> None:
         """Set the device limits."""
@@ -243,6 +291,7 @@ class ZendureDevice(EntityDevice):
             self.remainingTime.update_value(self.calcRemainingTime())
             return True
 
+        self._reported[key] = value
         changed = super().entityUpdate(key, value)
         try:
             if changed:
@@ -268,7 +317,9 @@ class ZendureDevice(EntityDevice):
                     case "outputHomePower":
                         self.aggrHomeOut.aggregate(dt_util.now(), value)
                     case "gridOffPower":
-                        self.aggrOffGrid.aggregate(dt_util.now(), value)
+                        # only the models with an off-grid output have this aggregate
+                        if (aggregate := getattr(self, "aggrOffGrid", None)) is not None:
+                            aggregate.aggregate(dt_util.now(), value)
                     case "inverseMaxPower":
                         self.setLimits(self.charge_limit, value)
                     case "chargeLimit" | "chargeMaxLimit":
@@ -304,24 +355,131 @@ class ZendureDevice(EntityDevice):
         soc = self.minSoc.asNumber
         return 0 if level <= soc else min(999, self.kWh * 10 / power * (level - soc))
 
+    def _is_ram_property(self, _name: str) -> bool:
+        """True when a write of this property never reaches the flash of the device."""
+        return False
+
+    def _write_properties(self, name: str, value: Any) -> dict[str, Any]:
+        return {name: value}
+
     async def entityWrite(self, entity: EntityZendure, value: Any) -> None:
+        """Write a property to the device, protecting its flash.
+
+        * A value equal to what the device reported is not written again.
+        * An identical write within a minute is dropped.
+        * A persistent property is written at most once per PROPERTY_INTERVAL; in between only the
+          newest value is kept and written when the window has passed (an automation that sets a
+          value every few seconds results in one flash write per window).
+        """
         if entity.translation_key is None:
             _LOGGER.error("Entity %s has no translation_key, cannot write property %s", entity.name, self.name)
             return
 
-        _LOGGER.info("Writing property %s %s => %s", self.name, entity.propertyName, value)
+        name = entity.propertyName
+        now = monotonic()
+        if name in self._reported and self._reported[name] == value:
+            _LOGGER.debug("Property %s %s already is %s", self.name, name, value)
+            self._deferred.pop(name, None)
+            return
+
+        last = self._writes.get(name)
+        if last is not None and last[0] == value and now - last[1] < Flash.SAME_VALUE_WINDOW:
+            return
+
+        if last is not None and not self._is_ram_property(name) and now - last[1] < Flash.PROPERTY_INTERVAL:
+            self._deferred[name] = (entity, value)
+            self._schedule_deferred(Flash.PROPERTY_INTERVAL - (now - last[1]))
+            _LOGGER.debug("Property %s %s => %s is written later (flash protection)", self.name, name, value)
+            return
+
+        self._deferred.pop(name, None)
+        await self._write_now(name, value)
+
+    async def _write_now(self, name: str, value: Any) -> None:
+        _LOGGER.info("Writing property %s %s => %s", self.name, name, value)
+        if await self._send_properties(self._write_properties(name, value)):
+            self._writes[name] = (value, monotonic())
+            self._reported.pop(name, None)  # unknown until the device reports it
+            if not self._is_ram_property(name):
+                self._count_flash_write()
+        else:
+            _LOGGER.warning("Property %s %s => %s could not be sent: no connection to the device", self.name, name, value)
+
+    async def _send_properties(self, properties: dict[str, Any]) -> bool:
+        """Send properties to the device over MQTT. Returns False when there is no connection."""
+        if self.mqtt is None:
+            return False
         self._messageid += 1
         payload = json.dumps(
             {
                 "deviceId": self.deviceId,
                 "messageId": self._messageid,
                 "timestamp": int(datetime.now().timestamp()),
-                "properties": {entity.propertyName: value},
+                "properties": properties,
             },
             default=lambda o: o.__dict__,
         )
-        if self.mqtt is not None:
-            self.mqtt.publish(self.topic_write, payload)
+        self.mqtt.publish(self.topic_write, payload)
+        return True
+
+    def _schedule_deferred(self, delay: float) -> None:
+        if self._deferred_handle is None and self.hass.loop.is_running():
+            self._deferred_handle = self.hass.loop.call_later(max(1.0, delay), self._deferred_fire)
+
+    def _deferred_fire(self) -> None:
+        self._deferred_handle = None
+        self.hass.async_create_task(self._flush_deferred())
+
+    async def _flush_deferred(self) -> None:
+        now = monotonic()
+        for name, (_entity, value) in list(self._deferred.items()):
+            last = self._writes.get(name)
+            if last is not None and now - last[1] < Flash.PROPERTY_INTERVAL:
+                self._schedule_deferred(Flash.PROPERTY_INTERVAL - (now - last[1]))
+                continue
+            del self._deferred[name]
+            if self._reported.get(name) != value:
+                await self._write_now(name, value)
+
+    def cancel_timers(self) -> None:
+        """Cancel pending timers when the integration is unloaded."""
+        if self._deferred_handle is not None:
+            self._deferred_handle.cancel()
+            self._deferred_handle = None
+        self._deferred.clear()
+
+    def _count_flash_write(self) -> None:
+        self.flash_count += 1
+        self.flashWrites.update_value(self.flash_count)
+
+    def _slew_factor_changed(self, _entity: Any, _value: Any) -> None:
+        self._apply_slew()
+
+    def configure_slew(self, enabled: bool, up: float, down: float, flip_delay: float, min_run: float, ready_up: float = DEFAULT_READY_UP) -> None:
+        """Apply the global slew settings; the per device factor scales the rates."""
+        self.slew.enabled = enabled
+        self._slew_base = (up, down, flip_delay, min_run, ready_up)
+        self._apply_slew()
+
+    def _apply_slew(self) -> None:
+        factor = (self.slewFactor.asNumber or 100) / 100
+        up, down, flip_delay, min_run, ready_up = self._slew_base
+        self.slew.up = up * factor
+        self.slew.down = down * factor
+        self.slew.ready_up = ready_up * factor
+        self.slew.flip_delay = flip_delay
+        self.slew.min_run = min_run
+
+    @property
+    def idle(self) -> bool:
+        """True when nothing flows and nothing is commanded: the device can be polled and written less often."""
+        return (
+            self.homeInput.asInt == 0
+            and self.homeOutput.asInt == 0
+            and self.solarInput.asInt == 0
+            and abs(self.slew.current) < ZERO_BAND
+            and not self.slew.pending
+        )
 
     async def button_press(self, _key: str) -> None:
         return
@@ -344,7 +502,15 @@ class ZendureDevice(EntityDevice):
         command["timestamp"] = int(datetime.now().timestamp())
         self.mqttPublish(self.topic_function, command)
 
+    def touchLastMessage(self) -> None:
+        """Update the last message timestamp at most every minute."""
+        now = datetime.now()
+        if (now - self._lastMessageUpdate).total_seconds() >= 60:
+            self._lastMessageUpdate = now
+            self.lastMessage.update_value(dt_util.now())
+
     async def mqttProperties(self, payload: Any) -> None:
+        self.touchLastMessage()
         if self.lastseen == datetime.min:
             self.lastseen = datetime.now() + timedelta(minutes=5)
             self.setStatus()
@@ -389,7 +555,7 @@ class ZendureDevice(EntityDevice):
                     # self.mqttProperties(payload)
 
                 case "register/replay":
-                    _LOGGER.info("Register replay for %s => %s", self.name, payload)
+                    _LOGGER.debug("Register replay for %s => %s", self.name, payload)
                     if self.mqtt is not None:
                         self.mqtt.publish(f"iot/{self.prodkey}/{self.deviceId}/register/replay", None, 1, True)
 
@@ -575,7 +741,7 @@ class ZendureDevice(EntityDevice):
                             "method": "token",
                             "password": Api.wifipsw,
                             "ssid": Api.wifissid,
-                            "timeZone": "GMT+01:00",
+                            "timeZone": self.timezone_offset(),
                             "token": "abcdefgh",
                         },
                     )
@@ -623,16 +789,23 @@ class ZendureDevice(EntityDevice):
 
             _LOGGER.info("BLE update ready")
 
+    def timezone_offset(self) -> str:
+        """Time zone of Home Assistant as the device expects it, for example GMT+02:00 (follows summer time)."""
+        offset = dt_util.now().utcoffset() or timedelta(0)
+        minutes = int(offset.total_seconds() // 60)
+        hours, mins = divmod(abs(minutes), 60)
+        return f"GMT{'+' if minutes >= 0 else '-'}{hours:02d}:{mins:02d}"
+
     async def bleCommand(self, client: BleakClient, command: Any) -> None:
         try:
             self._messageid += 1
             payload = json.dumps(command, default=lambda o: o.__dict__)
-            b = bytearray()
-            b.extend(map(ord, payload))
-            _LOGGER.info("BLE command: %s => %s", self.name, payload)
-            await client.write_gatt_char(SF_COMMAND_CHAR, b, response=False)
+            # never write the Wi-Fi password to the log
+            _LOGGER.info("BLE command: %s => %s", self.name, json.dumps({k: ("***" if k in {"password", "token"} else v) for k, v in command.items()}, default=lambda o: o.__dict__))
+            await client.write_gatt_char(SF_COMMAND_CHAR, bytearray(payload.encode("utf-8")), response=False)
         except Exception as err:
             _LOGGER.warning("BLE error: %s", err)
+            raise  # the caller reports the failure, otherwise a failed provisioning looks like a success
 
     async def power_get(self) -> bool:
         if self.lastseen < datetime.now():
@@ -650,32 +823,107 @@ class ZendureDevice(EntityDevice):
         else:
             self.state = DeviceState.INACTIVE
 
+        if self.state == DeviceState.OFFLINE:
+            self.slew.reset()
+            self.commandPower.update_value(0)
+        else:
+            measured = self.homeOutput.asInt - self.homeInput.asInt
+            self.slew.sync(measured)
+            await self._follow_battery_limit(measured)
+        self.slewActive.update_value(1 if self.slew.pending else 0)
+
         return self.state != DeviceState.OFFLINE
+
+    async def _follow_battery_limit(self, measured: int) -> None:
+        """A full battery stops charging (an empty one stops discharging) on its own, whatever the command says.
+
+        The slew limiter then continues from the measured power, and the old limit is cleared with one 0 W command
+        (RAM). Without this the device would jump back to the old limit (up to 2400 W at once) as soon as the SoC
+        drops below the limit again, and the next peak would wait for a direction change that does not happen.
+        """
+        if self.pwr_offgrid != 0:
+            return
+        if self.state == DeviceState.SOCFULL and measured > -ZERO_BAND and (self.slew.current <= -ZERO_BAND or self.limitInput.asInt > 0):
+            self.slew.follow(measured)
+            if self.limitInput.asInt > 0:
+                await self.charge(0)
+        elif self.state == DeviceState.SOCEMPTY and measured < ZERO_BAND and (self.slew.current >= ZERO_BAND or self.limitOutput.asInt > 0):
+            self.slew.follow(measured)
+            if self.limitOutput.asInt > 0:
+                await self.discharge(0)
 
     async def charge(self, _power: int) -> int:
         """Set the power output/input."""
         return 0
 
     async def power_charge(self, power: int) -> int:
-        """Set charge power."""
-        power = min(0, max(power, self.charge_limit))
+        """Set charge power (negative value), limited by the slew rate."""
+        power = self.slew.limit(min(0, max(power, self.charge_limit)))
+        if power > 0:
+            # still ramping down a discharge: never charge before the output reached 0 W
+            await self._apply_discharge(power)
+            return 0
+        return await self._apply_charge(power)
+
+    async def _apply_charge(self, power: int) -> int:
         """power is here a negative value, but homeInput and homeOutput are always positive"""
+        self.commandPower.update_value(power)
         if abs(power + self.homeInput.asInt - self.homeOutput.asInt) <= SmartMode.POWER_TOLERANCE:
-            _LOGGER.info("Power charge %s => no action [power %s]", self.name, power)
-            return - self.homeInput.asInt
+            _LOGGER.debug("Power charge %s => no action [power %s]", self.name, power)
+            return -self.homeInput.asInt
+        self.commandCount.update_value(self.commandCount.asInt + 1)
+        self._off_sent = False
         return await self.charge(power)
 
     async def discharge(self, _power: int) -> int:
         """Set the power output/input."""
         return 0
 
-    async def power_discharge(self, power: int) -> int:
-        """Set discharge power."""
-        power = max(0, min(power, self.discharge_limit))
+    async def power_discharge(self, power: int, ready: bool = False) -> int:
+        """Set discharge power, limited by the slew rate. ``ready`` marks the start of the device kept ready for peaks."""
+        power = self.slew.limit(max(0, min(power, self.discharge_limit)), ready=ready)
+        if power < 0:
+            # still ramping down a charge: never discharge before the input reached 0 W
+            await self._apply_charge(power)
+            return 0
+        return await self._apply_discharge(power)
+
+    async def _apply_discharge(self, power: int) -> int:
+        self.commandPower.update_value(power)
         if abs(power - self.homeOutput.asInt + self.homeInput.asInt) <= SmartMode.POWER_TOLERANCE:
-            _LOGGER.info("Power discharge %s => no action [power %s]", self.name, power)
+            _LOGGER.debug("Power discharge %s => no action [power %s]", self.name, power)
             return self.homeOutput.asInt
+        self.commandCount.update_value(self.commandCount.asInt + 1)
+        self._off_sent = False
         return await self.discharge(power)
+
+    async def power_off_ramped(self) -> bool:
+        """Ramp the power down to 0 W in steps, then switch off. Returns True while still ramping."""
+        if not self.slew.enabled or not self.online:
+            self.slew.reset()
+            await self.switch_off()
+            return False
+
+        self.slew.sync(self.homeOutput.asInt - self.homeInput.asInt)
+        if abs(self.slew.current) >= ZERO_BAND and (power := self.slew.limit(0, hold=False)) != 0:
+            _LOGGER.debug("Ramping down %s => %sW", self.name, power)
+            self.commandPower.update_value(power)
+            await (self.charge(power) if power < 0 else self.discharge(power))
+            self.slewActive.update_value(1)
+            return True
+
+        self.slew.reset()
+        self.slewActive.update_value(0)
+        self.commandPower.update_value(0)
+        await self.switch_off()
+        return False
+
+    async def switch_off(self) -> None:
+        """Switch the device off, but only once: do not repeat a command the device already got."""
+        if self._off_sent and abs(self.slew.current) < ZERO_BAND:
+            return
+        self._off_sent = True
+        await self.power_off()
 
     async def power_off(self) -> None:
         """Set the power off."""
@@ -719,6 +967,9 @@ class ZendureLegacy(ZendureDevice):
         from .api import Api
 
         if self.lastseen != datetime.min:
+            # a completely idle device is refreshed every third minute (the time-out is 5 minutes)
+            if self.idle and _update_count % 3 != 0:
+                return
             self.mqttPublish(self.topic_read, {"properties": ["getAll"]}, self.mqtt)
         else:
             self.mqttPublish(self.topic_read, {"properties": ["getAll"]}, Api.mqttCloud)
@@ -726,21 +977,53 @@ class ZendureLegacy(ZendureDevice):
 
     def mqttMessage(self, topic: str, payload: Any) -> bool:
         if topic == "register/replay":
-            _LOGGER.info("Register replay for %s => %s", self.name, payload)
+            _LOGGER.debug("Register replay for %s => %s", self.name, payload)
             return True
 
         return super().mqttMessage(topic, payload)
 
 
+class HttpStatusError(Exception):
+    """The device answered with an HTTP status other than 200."""
+
+    def __init__(self, status: int) -> None:
+        super().__init__(f"HTTP status {status}")
+        self.status = status
+
+
 class ZendureZenSdk(ZendureDevice):
-    """Zendure Zen SDK class for devices."""
+    """Zendure Zen SDK class for devices.
+
+    The local zenSDK runs on a small ESP32 with very little RAM, so every request is serialized
+    per device, spaced at least Http.MIN_INTERVAL apart, and a device that does not answer is left
+    alone for a while (back-off) instead of being hammered.
+    """
+
+    # these properties are written with smartMode=1: they do not reach the flash of the device
+    RAM_PROPERTIES = frozenset({"inputLimit", "outputLimit", "acMode"})
 
     def __init__(self, hass: HomeAssistant, deviceId: str, name: str, model: str, definition: dict[str, str], parent: str | None = None) -> None:
         """Initialize Device."""
         self.session = async_get_clientsession(hass, verify_ssl=False)
+        self._http_errors: set[str] = set()
+        self._http_lock = asyncio.Lock()
+        self._http_last = 0.0
+        self._http_failures = 0
+        self._http_retry_after = 0.0
+        self._http_issue = False
+        self._poll_last = -Http.POLL_IDLE
         super().__init__(hass, deviceId, name, model, definition, parent)
         self.connection = ZendureRestoreSelect(self, "connection", {0: "cloud", 2: "zenSDK"}, self.mqttSelect, 0)
         self.httpid = 0
+        self.httpErrors = ZendureSensor(self, "httpErrors", None, None, None, "total_increasing", 0, state=0, category=EntityCategory.DIAGNOSTIC)
+        self.ipAddressSensor = ZendureSensor(self, "ipAddress", state=self.ipAddress, category=EntityCategory.DIAGNOSTIC)
+
+    def set_address(self, address: str) -> None:
+        """Change the address of the device (manual override or discovery)."""
+        if address and address != self.ipAddress:
+            _LOGGER.info("Address of %s changed from %s to %s", self.name, self.ipAddress, address)
+            self.ipAddress = address
+            self.ipAddressSensor.update_value(address)
 
     async def mqttSelect(self, select: Any, _value: Any) -> None:
         from .api import Api
@@ -748,90 +1031,193 @@ class ZendureZenSdk(ZendureDevice):
         self.mqtt = None
         match select.value:
             case 0:
-                Api.mqttCloud.unsubscribe(f"/{self.prodkey}/{self.deviceId}/#")
-                Api.mqttCloud.unsubscribe(f"iot/{self.prodkey}/{self.deviceId}/#")
+                # cloud: listen to the cloud topics of this device again
+                Api.mqttCloud.subscribe(f"/{self.prodkey}/{self.deviceId}/#")
+                Api.mqttCloud.subscribe(f"iot/{self.prodkey}/{self.deviceId}/#")
 
             case 2:
+                # zenSDK: the device is reached over HTTP, stop listening to the cloud topics
                 Api.mqttCloud.unsubscribe(f"/{self.prodkey}/{self.deviceId}/#")
                 Api.mqttCloud.unsubscribe(f"iot/{self.prodkey}/{self.deviceId}/#")
 
         _LOGGER.debug("Mqtt selected %s", self.name)
 
-    async def entityWrite(self, entity: EntityZendure, value: Any) -> None:
-        if entity.translation_key is None:
-            _LOGGER.error("Entity %s has no translation_key, cannot write property %s", entity.name, self.name)
-            return
+    def _is_ram_property(self, name: str) -> bool:
+        return name in self.RAM_PROPERTIES
 
+    def _write_properties(self, name: str, value: Any) -> dict[str, Any]:
+        return {name: value, "smartMode": 1} if name in self.RAM_PROPERTIES else {name: value}
+
+    async def _send_properties(self, properties: dict[str, Any]) -> bool:
         if self.online and self.connection.value == 0:
-            await super().entityWrite(entity, value)
-        else:
-            _LOGGER.info("Writing property %s %s => %s", self.name, entity.propertyName, value)
-            await self.httpPost("properties/write", {"properties": {entity.propertyName: value}})
+            return await super()._send_properties(properties)
+        return await self.httpPost("properties/write", {"properties": properties})
+
+    # ------------------------------------------------------------------------------------------
+    # polling
+    # ------------------------------------------------------------------------------------------
+    async def poll(self, force: bool = False) -> None:
+        """Read the report of the device; a completely idle device is read less often."""
+        now = monotonic()
+        if not force and now - self._poll_last < (Http.POLL_IDLE if self.idle else Http.POLL_ACTIVE):
+            return
+        self._poll_last = now
+        if json := await self.httpGet("properties/report"):
+            await self.mqttProperties(json)
 
     async def dataRefresh(self, update_count: int) -> None:
         if (update_count == 0 and not self.online) or self.connection.value == SmartMode.ZENSDK:
-            if json := await self.httpGet("properties/report"):
-                await self.mqttProperties(json)
+            await self.poll(force=update_count == 0)
 
     async def power_get(self) -> bool:
         """Get the current power."""
         if self.connection.value != 0:
-            json = await self.httpGet("properties/report")
-            await self.mqttProperties(json)
+            await self.poll()
+        result = await super().power_get()
+        await self._flash_tick()
+        return result
 
-        return await super().power_get()
-
+    # ------------------------------------------------------------------------------------------
+    # commands
+    # ------------------------------------------------------------------------------------------
     async def charge(self, power: int, _off: bool = False) -> int:
         """Set charge power."""
-        _LOGGER.info("Power charge %s => %s", self.name, power)
+        _LOGGER.debug("Power charge %s => %s", self.name, power)
         if power == -SmartMode.POWER_START and self.limitInput.asInt >= SmartMode.POWER_START and self.homeInput.asInt == 0:
             power = -min(self.limitInput.asInt + 4, 2 * SmartMode.POWER_START)
-            _LOGGER.info("Power charge kickstart %s => %s", self.name, power)
-        await self.doCommand({"properties": {"smartMode": 0 if power == 0 and self.pwr_offgrid == 0 else 1, "acMode": 1, "outputLimit": 0, "inputLimit": -power}})
+            _LOGGER.debug("Power charge kickstart %s => %s", self.name, power)
+        await self._power_command(1, 0, -power)
         return power
 
     async def discharge(self, power: int) -> int:
-        _LOGGER.info("Power discharge %s => %s", self.name, power)
+        _LOGGER.debug("Power discharge %s => %s", self.name, power)
         if power == SmartMode.POWER_START and self.limitOutput.asInt >= SmartMode.POWER_START and self.homeOutput.asInt == 0:
             power = min(self.limitOutput.asInt + 4, 2 * SmartMode.POWER_START)
-            _LOGGER.info("Power discharge kickstart %s => %s", self.name, power)
-        await self.doCommand({"properties": {"smartMode": 0 if power == 0 and self.pwr_offgrid == 0 else 1, "acMode": 2, "outputLimit": power, "inputLimit": 0}})
+            _LOGGER.debug("Power discharge kickstart %s => %s", self.name, power)
+        await self._power_command(2, power, 0)
         return power
 
     async def power_off(self) -> None:
-        """Set the power off."""
-        await self.doCommand({"properties": {"smartMode": 0 if self.pwr_offgrid == 0 else 1, "acMode": 2, "outputLimit": 0, "inputLimit": 0}})
+        """Set the power off. The first time the safe 0 W state is also stored in the flash of the device."""
+        await self._power_command(2, 0, 0, persist=True)
 
-    async def doCommand(self, command: Any) -> None:
+    async def _power_command(self, ac_mode: int, output: int, input_: int, persist: bool = False) -> None:
+        """Send a power command.
+
+        smartMode=1 keeps the command in RAM, so the constant stream of power changes does not wear out
+        the flash of the device. Only the safe 0 W state is stored in flash (smartMode=0), at most once:
+        when the manager is switched off or after the device has been idle for Flash.IDLE_PERSIST seconds.
+        After a reboot the device then starts at 0 W instead of at the last (high) setpoint.
+        """
+        persist = persist and self.persist_safe_state and self.pwr_offgrid == 0 and self._flash_safe is not True
+        properties = {"smartMode": 0 if persist else 1, "acMode": ac_mode, "outputLimit": output, "inputLimit": input_}
+        if await self.doCommand({"properties": properties}) and persist:
+            self._flash_safe = True
+            self._flash_last = monotonic()
+            self._count_flash_write()
+            _LOGGER.debug("Safe 0 W state stored in the flash of %s", self.name)
+
+    async def _flash_tick(self) -> None:
+        """Store the safe 0 W state once, after a long idle period (needs one flash write instead of one per stop)."""
+        now = monotonic()
+        if not self.online or self.pwr_offgrid != 0 or not self.idle:
+            self._idle_since = None
+            return
+        if self._idle_since is None:
+            self._idle_since = now
+        elif now - self._idle_since >= Flash.IDLE_PERSIST and self._flash_safe is not True and now - self._flash_last >= Flash.MIN_INTERVAL:
+            await self._power_command(2, 0, 0, persist=True)
+
+    async def doCommand(self, command: Any) -> bool:
         if self.connection.value != 0:
-            await self.httpPost("properties/write", command)
-        else:
-            self.mqttPublish(self.topic_write, command, self.mqtt)
+            return await self.httpPost("properties/write", command)
+        self.mqttPublish(self.topic_write, command, self.mqtt)
+        return self.mqtt is not None  # without a connection the command is lost, do not count it as stored
+
+    # ------------------------------------------------------------------------------------------
+    # HTTP
+    # ------------------------------------------------------------------------------------------
+    async def _http(self, method: str, path: str, command: Any = None) -> tuple[bool, Any]:
+        """One serialized request. Returns (success, parsed json or None)."""
+        async with self._http_lock:
+            now = monotonic()
+            if now < self._http_retry_after:
+                return False, None  # back-off: the device did not answer, give it some time
+
+            if (wait := self._http_last + Http.MIN_INTERVAL - now) > 0:
+                await asyncio.sleep(wait)
+            kind = method.lower()
+            try:
+                url = f"http://{self.ipAddress}/{path}"
+                async with self.session.request(method, url, json=command, headers=CONST_HEADER, timeout=CONST_TIMEOUT) as response:
+                    if response.status != HTTP_OK:
+                        raise HttpStatusError(response.status)
+                    body = await response.text()
+                payload = json.loads(body) if method == "GET" else None
+            except Exception as err:
+                self._http_failed(kind, err)
+                return False, None
+            finally:
+                self._http_last = monotonic()
+
+            self._http_succeeded(kind)
+            return True, payload
+
+    def _http_failed(self, kind: str, err: Exception) -> None:
+        self._http_failures += 1
+        self._http_retry_after = monotonic() + min(Http.BACKOFF_MAX, Http.BACKOFF_BASE * 2 ** (self._http_failures - 1))
+        self._logHttpError(kind, err)
+        if self._http_failures >= Http.OFFLINE_AFTER:
+            self.lastseen = datetime.min
+        if self._http_failures >= Http.ISSUE_AFTER:
+            self._update_issue(True)
+
+    def _http_succeeded(self, kind: str) -> None:
+        self._http_errors.discard(kind)
+        if self._http_failures:
+            _LOGGER.info("%s answers again after %s failed requests", self.name, self._http_failures)
+        self._http_failures = 0
+        self._http_retry_after = 0.0
+        self._update_issue(False)
+
+    def _update_issue(self, failing: bool) -> None:
+        """Raise a repair issue while the device does not answer, remove it when it does."""
+        issue_id = f"zensdk_unreachable_{self.snNumber.lower()}"
+        if failing and not self._http_issue:
+            self._http_issue = True
+            ir.async_create_issue(
+                self.hass,
+                DOMAIN,
+                issue_id,
+                is_fixable=False,
+                severity=ir.IssueSeverity.WARNING,
+                translation_key="zensdk_unreachable",
+                translation_placeholders={"name": self.name, "address": self.ipAddress},
+            )
+        elif not failing and self._http_issue:
+            self._http_issue = False
+            ir.async_delete_issue(self.hass, DOMAIN, issue_id)
 
     async def httpGet(self, url: str, key: str | None = None) -> dict[str, Any]:
-        try:
-            url = f"http://{self.ipAddress}/{url}"
-            response = await self.session.get(url, headers=CONST_HEADER, timeout=CONST_TIMEOUT)
-            payload = json.loads(await response.text())
-            self.lastseen = datetime.now()
-            return payload if key is None else payload.get(key, {})
-        except Exception as e:
-            _LOGGER.error("%s for %s during httpGet%s", type(e).__name__, self.name, f": {e}" if str(e) else "!")
-            self.lastseen = datetime.min
-        return {}
+        ok, payload = await self._http("GET", url)
+        if not ok or not isinstance(payload, dict):
+            return {}
+        self.lastseen = datetime.now()
+        return payload if key is None else payload.get(key, {})
+
+    def _logHttpError(self, kind: str, err: Exception) -> None:
+        """Log the first failure of a request type as error, repeats at debug level until it succeeds again."""
+        level = logging.DEBUG if kind in self._http_errors else logging.ERROR
+        self._http_errors.add(kind)
+        self.httpErrors.update_value(self.httpErrors.asInt + 1)
+        _LOGGER.log(level, "%s for %s during http%s%s", type(err).__name__, self.name, kind.capitalize(), f": {err}" if str(err) else "!")
 
     async def httpPost(self, url: str, command: Any) -> bool:
-        try:
-            self.httpid += 1
-            command["id"] = self.httpid
-            command["sn"] = self.snNumber
-            url = f"http://{self.ipAddress}/{url}"
-            await self.session.post(url, json=command, headers=CONST_HEADER, timeout=CONST_TIMEOUT)
-        except Exception as e:
-            _LOGGER.error("%s for %s during httpPost%s", type(e).__name__, self.name, f": {e}" if str(e) else "!")
-            self.lastseen = datetime.min
-            return False
-        return True
+        self.httpid += 1
+        command["id"] = self.httpid
+        command["sn"] = self.snNumber
+        ok, _ = await self._http("POST", url, command)
+        return ok
 
 
 @dataclass

@@ -5,7 +5,6 @@ from typing import Any
 
 from homeassistant.core import HomeAssistant
 
-from custom_components.zendure_ha.const import SmartMode
 from custom_components.zendure_ha.device import ZendureLegacy
 
 _LOGGER = logging.getLogger(__name__)
@@ -24,7 +23,7 @@ class AIO2400(ZendureLegacy):
         return 0
 
     async def discharge(self, power: int) -> int:
-        _LOGGER.info("Power discharge %s => %s", self.name, power)
+        _LOGGER.debug("Power discharge %s => %s", self.name, power)
         self.mqttInvoke(
             {
                 "arguments": [

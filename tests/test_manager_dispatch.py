@@ -14,7 +14,8 @@ from datetime import datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
 
-from custom_components.zendure_ha.const import DeviceState, ManagerState
+from custom_components.zendure_ha.const import DeviceState, ManagerMode, ManagerState
+from custom_components.zendure_ha.dispatch import RoleSelector
 from custom_components.zendure_ha.manager import ZendureManager
 
 
@@ -36,6 +37,7 @@ class _FakeDevice:
         self.pwr_offgrid = 0
         self.pwr_produced = 0
         self.state = state
+        self.deviceId = f"dev{id(self)}"
         self.charge_start = 0
         self.charge_optimal = 0
         self.discharge_start = 0
@@ -47,8 +49,9 @@ class _FakeDevice:
         self.charge_calls.append(power)
         return power
 
-    async def power_discharge(self, power: int) -> int:
+    async def power_discharge(self, power: int, ready: bool = False) -> int:
         self.discharge_calls.append(power)
+        self.ready_calls = [*getattr(self, "ready_calls", []), ready]
         return power
 
 
@@ -70,6 +73,8 @@ def _make_manager_harness() -> ZendureManager:
     manager.idle_lvlmax = 0
     manager.idle_lvlmin = 0
     manager.pwr_low = 0
+    manager.roles = RoleSelector()
+    manager.role_margin = 10
     return manager
 
 
@@ -108,3 +113,45 @@ async def test_power_charge_first_call_primes_hysteria_and_forces_zero_setpoint(
     assert manager.charge_time == now + timedelta(seconds=2)
     assert manager.pwr_low == 0
     assert manager.operationstate.values == [ManagerState.IDLE.value]
+
+
+async def test_power_charge_without_hysteresis_applies_setpoint_immediately() -> None:
+    """Manual mode passes hysteresis=False: the first call must dispatch the chosen power, not 0."""
+    manager = _make_manager_harness()
+    device = _FakeDevice(pwr_max=-2400, electric_level=50)
+    manager.charge = [device]
+    manager.charge_limit = -2400
+    manager.charge_weight = device.pwr_max * (100 - device.electricLevel.asInt)
+    now = datetime(2026, 7, 24, 12, 0, 0)
+
+    await manager.power_charge(-1000, now, hysteresis=False)
+
+    assert device.charge_calls == [-1000]
+    assert manager.charge_time == datetime.max  # smart-mode hysteresis state untouched
+    assert manager.operationstate.values == [ManagerState.CHARGE.value]
+
+
+async def test_dispatch_manual_runs_update_only_in_manual_mode() -> None:
+    manager = _make_manager_harness()
+    manager.hass = SimpleNamespace(is_running=True, states=SimpleNamespace(get=lambda _entity: None))
+    manager.p1meter = None
+    manager.p1_factor = 1
+    manager.zero_fast = datetime.min
+    calls: list[tuple[int, bool]] = []
+
+    async def fake_update(p1: int, is_fast: bool, _time: datetime) -> None:
+        calls.append((p1, is_fast))
+
+    manager._run_power_update = fake_update  # noqa: SLF001
+
+    manager.operation = ManagerMode.MATCHING
+    await manager.dispatch_manual()
+    assert calls == []
+
+    manager.operation = ManagerMode.MANUAL
+    await manager.dispatch_manual()
+    assert calls == [(0, True)]
+
+    manager.zero_fast = datetime.max  # an update is already running
+    await manager.dispatch_manual()
+    assert calls == [(0, True)]

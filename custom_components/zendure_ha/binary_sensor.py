@@ -1,26 +1,27 @@
-"""Interfaces with the Zendure Integration binairy sensors."""
+"""Interfaces with the Zendure HA-GP013 binairy sensors."""
 
 import logging
 from typing import Any
 
 from homeassistant.components.binary_sensor import BinarySensorEntity, BinarySensorEntityDescription
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.template import Template
 
-from .entity import EntityDevice, EntityZendure
+from .entity import EntityAdder, EntityDevice, EntityZendure
 
 _LOGGER = logging.getLogger(__name__)
 
 
 async def async_setup_entry(_hass: HomeAssistant, _config_entry: ConfigEntry, async_add_entities: AddEntitiesCallback) -> None:
     """Set up the Zendure binary_sensor."""
-    ZendureBinarySensor.add = async_add_entities
+    ZendureBinarySensor.add.attach(async_add_entities)
 
 
 class ZendureBinarySensor(EntityZendure, BinarySensorEntity):
-    add: AddEntitiesCallback
+    add: AddEntitiesCallback | EntityAdder = EntityAdder()
 
     def __init__(
         self,
@@ -28,9 +29,12 @@ class ZendureBinarySensor(EntityZendure, BinarySensorEntity):
         uniqueid: str,
         template: Template | None = None,
         deviceclass: Any | None = None,
+        category: EntityCategory | None = None,
     ) -> None:
         """Initialize a binary sensor entity."""
         super().__init__(device, uniqueid, "binary_sensor")
+        if category is not None:
+            self._attr_entity_category = category
         self.entity_description = BinarySensorEntityDescription(key=uniqueid, name=uniqueid, device_class=deviceclass)
         self._attr_is_on = False
         self._value_template: Template | None = template

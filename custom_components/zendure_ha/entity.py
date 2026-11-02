@@ -7,12 +7,12 @@ import logging
 import re
 import unicodedata
 from pathlib import Path
+from collections.abc import Callable
 from typing import Any
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
-from homeassistant.helpers import restore_state as rs
 from homeassistant.helpers.device_registry import DeviceEntry, DeviceInfo
 from homeassistant.helpers.entity import Entity, EntityPlatformState
 from homeassistant.helpers.template import Template
@@ -37,6 +37,63 @@ def snakecase(value: str) -> str:
 _LOGGER = logging.getLogger(__name__)
 
 CONST_FACTOR = 2
+POWER_DEADBAND = 2  # W, smaller changes of a power sensor are not recorded
+
+
+class EntityAdder:
+    """Stand-in for `async_add_entities` that queues entities until the platform is set up.
+
+    Every platform class owns one. Entities may be created before or after the platform was
+    set up (or while it is being reloaded) without losing any, and tests do not need a platform.
+    """
+
+    def __init__(self) -> None:
+        self._callback: Callable[[list[Any]], None] | None = None
+        self._pending: list[Any] = []
+
+    def __call__(self, entities: list[Any]) -> None:
+        if self._callback is None:
+            self._pending.extend(entities)
+        else:
+            self._callback(entities)
+
+    def attach(self, callback: Callable[[list[Any]], None]) -> None:
+        """Called by the platform setup: flush the queue and add directly from now on."""
+        self._callback = callback
+        if self._pending:
+            pending, self._pending = self._pending, []
+            callback(pending)
+
+    def detach(self) -> None:
+        """Called when the platform is unloaded."""
+        self._callback = None
+        self._pending = []
+
+
+def quiet(*entities: Any) -> None:
+    """Disable entities by default: they stay available, but nothing is recorded until the user enables them.
+
+    Used for high frequency diagnostics, to keep the number of writes to the recorder database
+    (often an SD card or eMMC) low.
+    """
+    for entity in entities:
+        entity._attr_entity_registry_enabled_default = False  # noqa: SLF001
+
+
+def get_registry_device(hass: HomeAssistant, identifier: str) -> DeviceEntry | None:
+    """Look up a Zendure device in the device registry by its identifier.
+
+    Since Home Assistant 2026.8 `async_get_device` is deprecated because identifiers are no
+    longer unique across config entries. Use the per config entry lookup when available and
+    fall back to the old call on older Home Assistant versions.
+    """
+    registry = dr.async_get(hass)
+    if hasattr(registry, "async_get_device_by_identifier"):
+        for entry in hass.config_entries.async_entries(DOMAIN):
+            if (device := registry.async_get_device_by_identifier((DOMAIN, identifier), entry.entry_id)) is not None:
+                return device
+        return None
+    return registry.async_get_device(identifiers={(DOMAIN, identifier)})
 
 
 class EntityZendure(Entity):
@@ -225,13 +282,18 @@ class EntityDevice:
         )
         if parent is None:
             self.attr_device_info["hw_version"] = deviceId
-        device_registry = dr.async_get(self.hass)
-        if di := device_registry.async_get_device(identifiers={(DOMAIN, sn)}):
+        if di := get_registry_device(self.hass, sn):
             self.attr_device_info["connections"] = di.connections
             self.check_entities(di, snakecase(self.name.lower()))
 
         if parent is not None:
-            self.attr_device_info["via_device"] = (DOMAIN, parent)
+            if hasattr(dr.async_get(self.hass), "async_get_device_by_identifier"):
+                # via_device is deprecated, the registry id of the parent device is required.
+                # If the parent is not registered yet, the link is skipped and set on a later start.
+                if (parent_device := get_registry_device(self.hass, parent)) is not None:
+                    self.attr_device_info["via_device_id"] = parent_device.id
+            else:
+                self.attr_device_info["via_device"] = (DOMAIN, parent)
 
     def check_entities(self, di: DeviceEntry, name: str) -> None:
         # Get all entities for this device and group them by translation_key if they match the current device and platform
@@ -284,7 +346,7 @@ class EntityDevice:
             if info := self.createEntity.get(key, None):
                 match info if isinstance(info, str) else info[0]:
                     case "W":
-                        entity = ZendureSensor(self, key, None, "W", "power", "measurement", None)
+                        entity = ZendureSensor(self, key, None, "W", "power", "measurement", None, deadband=POWER_DEADBAND)
                         if len(info) >= 3:
                             entity.icon = info[2]
                     case "V":
@@ -303,7 +365,7 @@ class EntityDevice:
                         tmpl = Template("{{ value | int / 60 }}", self.hass)
                         entity = ZendureSensor(self, key, tmpl, "h", "duration", "measurement", None)
                     case "°C":
-                        tmpl = Template("{{ (value | float - 2731) / 10 | round(1) }}", self.hass)
+                        tmpl = Template("{{ ((value | float - 2731) / 10) | round(1) }}", self.hass)
                         entity = ZendureSensor(self, key, tmpl, "°C", "temperature", "measurement", None)
                     case "dBm":
                         entity = ZendureSensor(
@@ -352,8 +414,6 @@ class EntityDevice:
 
     def updateVersion(self, version: str) -> None:
         _LOGGER.info("Updating %s software version from %s to %s", self.name, self.attr_device_info.get("sw_version"), version)
-        device_registry = dr.async_get(self.hass)
         identifier = self.sn or self.name
-        device_entry = device_registry.async_get_device(identifiers={(DOMAIN, identifier)})
-        if device_entry is not None:
-            device_registry.async_update_device(device_entry.id, sw_version=version)
+        if (device_entry := get_registry_device(self.hass, identifier)) is not None:
+            dr.async_get(self.hass).async_update_device(device_entry.id, sw_version=version)

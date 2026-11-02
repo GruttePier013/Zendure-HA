@@ -1,6 +1,8 @@
 """Migration helpers for Zendure integration."""
 
 import logging
+import re
+import shutil
 from pathlib import Path
 
 from homeassistant.components.persistent_notification import async_create
@@ -11,9 +13,19 @@ from homeassistant.helpers import restore_state as rs
 
 from .const import DOMAIN
 from .device import ZendureBattery
-from .entity import snakecase
+from .entity import get_registry_device, snakecase
 
 _LOGGER = logging.getLogger(__name__)
+
+MAX_FILE_SIZE = 5 * 1024 * 1024  # larger files are not touched
+BACKUP_SUFFIX = ".zendure-backup"
+
+
+def replace_entity_ids(content: str, changes: list[tuple[str, str]]) -> str:
+    """Replace entity ids as whole ids: sensor.x_power must not change sensor.x_power_limit."""
+    for old_id, new_id in changes:
+        content = re.sub(rf"(?<![A-Za-z0-9_.]){re.escape(old_id)}(?![A-Za-z0-9_])", new_id, content)
+    return content
 
 
 class Migration:
@@ -32,10 +44,10 @@ class Migration:
         if not identifier:
             return
 
-        existing = device_registry.async_get_device(identifiers={(DOMAIN, identifier)})
+        existing = get_registry_device(hass, identifier)
         if existing is None:
             for ident in [name, name.lower(), unique, fallback, fallback.lower()]:
-                existing = device_registry.async_get_device(identifiers={(DOMAIN, ident)})
+                existing = get_registry_device(hass, ident)
                 if existing is not None:
                     break
 
@@ -54,11 +66,12 @@ class Migration:
         def update_file(path: Path) -> None:
             nonlocal file_modified
             try:
+                if path.name.endswith(BACKUP_SUFFIX) or path.stat().st_size > MAX_FILE_SIZE:
+                    return
                 content = path.read_text(encoding="utf-8")
-                updated = content
-                for old_id, new_id in changes:
-                    updated = updated.replace(old_id, new_id)
+                updated = replace_entity_ids(content, changes)
                 if updated != content:
+                    shutil.copy2(path, path.with_name(path.name + BACKUP_SUFFIX))  # keep the original, this is a one-time migration
                     path.write_text(updated, encoding="utf-8")
                     file_modified = True
             except Exception as e:
@@ -146,7 +159,7 @@ class Migration:
                     except Exception as e:
                         _LOGGER.error("Failed to migrate entity %s: %s", entity.entity_id, e)
             except Exception as e:
-                _LOGGER.error("Failed to migrate entity %s: %s", entity.entity_id, e)
+                _LOGGER.error("Failed to migrate device %s: %s", device.name, e)
 
         # update template config entries
         modified = 0
@@ -163,11 +176,11 @@ class Migration:
                         changed |= change_id(value, oid, nid)
                     elif isinstance(value, list):
                         for i, item in enumerate(value):
-                            if isinstance(item, str) and oid in item:
-                                value[i] = item.replace(oid, nid)
+                            if isinstance(item, str) and (new_item := replace_entity_ids(item, [(oid, nid)])) != item:
+                                value[i] = new_item
                                 changed = True
-                    elif isinstance(value, str) and oid in value:
-                        data[key] = value.replace(oid, nid)
+                    elif isinstance(value, str) and (new_value := replace_entity_ids(value, [(oid, nid)])) != value:
+                        data[key] = new_value
                         changed = True
                 return changed
 

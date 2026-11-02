@@ -1,4 +1,4 @@
-"""Interfaces with the Zendure Integration."""
+"""Interfaces with the Zendure HA-GP013."""
 
 import asyncio
 import logging
@@ -11,20 +11,20 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
 
-from .entity import EntityDevice, EntityZendure
+from .entity import EntityAdder, EntityDevice, EntityZendure
 
 _LOGGER = logging.getLogger(__name__)
 
 
 async def async_setup_entry(_hass: HomeAssistant, _config_entry: ConfigEntry, async_add_entities: AddEntitiesCallback) -> None:
     """Set up the Zendure select."""
-    ZendureSelect.add = async_add_entities
+    ZendureSelect.add.attach(async_add_entities)
 
 
 class ZendureSelect(EntityZendure, SelectEntity):
     """Representation of a Zendure select entity."""
 
-    add: AddEntitiesCallback
+    add: AddEntitiesCallback | EntityAdder = EntityAdder()
 
     def __init__(self, device: EntityDevice, uniqueid: str, options: dict[Any, str], onchanged: Callable | None, current: int | None = None) -> None:
         """Initialize a select entity."""
@@ -37,12 +37,18 @@ class ZendureSelect(EntityZendure, SelectEntity):
         else:
             self._attr_current_option = self._attr_options[0]
         self.onchanged = onchanged
+        self._pending_option: str | None = None  # restored option that is not (yet) one of the options
         self.add([self])
 
     def setDict(self, options: dict[Any, str]) -> None:
         """Set the options for the select entity."""
         self._options = options
         self._attr_options = list(options.values())
+        # an option that was restored before it existed (for example "Part of X fusegroup", which only
+        # exists once device X has restored its own setting) is applied as soon as it is available
+        if self._pending_option is not None and self._pending_option in self._attr_options:
+            self._attr_current_option = self._pending_option
+            self._pending_option = None
         if self._attr_current_option not in self._attr_options:
             self._attr_current_option = self._attr_options[0]
         if self.hass and self.hass.loop.is_running():
@@ -75,6 +81,7 @@ class ZendureSelect(EntityZendure, SelectEntity):
 
     async def async_select_option(self, option: str) -> None:
         """Update the current selected option."""
+        self._pending_option = None
         self._attr_current_option = option
         value = self.value
         if self.onchanged:
@@ -107,6 +114,10 @@ class ZendureRestoreSelect(ZendureSelect, RestoreEntity):
         state = await self.async_get_last_state()
         if state is not None and state.state in self._attr_options:
             self._attr_current_option = state.state
+        elif state is not None and state.state not in (None, "unknown", "unavailable"):
+            self._pending_option = state.state  # applied by setDict once the option exists
+            if self._attr_current_option not in self._attr_options:
+                self._attr_current_option = self._attr_options[0]
         elif self._attr_current_option not in self._attr_options:
             self._attr_current_option = self._attr_options[0]
 

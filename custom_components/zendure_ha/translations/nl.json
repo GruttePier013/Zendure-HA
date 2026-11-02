@@ -16,8 +16,7 @@
     "step": {
       "user": {
         "data": {
-          "username": "Zendure Gebruikersnaam",
-          "password": "Zendure Wachtwoord",
+          "token": "Zendure-token",
           "p1meter": "P1 Sensor voor slimme matching",
           "mqttlog": "MQTT-Communicatie loggen",
           "mqttlocal": "Lokale MQTT gebruiken",
@@ -39,8 +38,7 @@
       },
       "reconfigure": {
         "data": {
-          "username": "Zendure Gebruikersnaam",
-          "password": "Zendure Wachtwoord",
+          "token": "Zendure-token",
           "p1meter": "P1 Sensor voor slimme matching",
           "mqttlog": "MQTT-Communicatie loggen",
           "mqttlocal": "Lokale MQTT gebruiken",
@@ -48,18 +46,6 @@
           "wifissid": "Wifi SSID",
           "wifipsw": "Wifi Wachtwoord"
         }
-      }
-    }
-  },
-  "options": {
-    "step": {
-      "init": {
-        "data": {
-          "scan_interval": "Scaninterval (seconden)",
-          "auto_mqtt_user": "MQTT-gebruikers automatisch beheren"
-        },
-        "description": "Pas je opties aan.",
-        "title": "Zendure Integratie Opties"
       }
     }
   },
@@ -81,6 +67,30 @@
       },
       "rest_state": {
         "name": "Energiebesparende modus"
+      },
+      "reverse_state": {
+        "name": "Status terugleveren"
+      },
+      "local_state": {
+        "name": "Lokale verbinding"
+      },
+      "ct_off": {
+        "name": "CT losgekoppeld"
+      },
+      "low_temperature": {
+        "name": "Lage temperatuur"
+      },
+      "hems_state": {
+        "name": "HEMS actief"
+      },
+      "slew_active": {
+        "name": "Ramp actief (slew-begrensd)"
+      },
+      "mqtt_cloud": {
+        "name": "Cloud MQTT verbonden"
+      },
+      "mqtt_local": {
+        "name": "Lokale MQTT verbonden"
       }
     },
     "number": {
@@ -98,6 +108,9 @@
       },
       "soc_set": {
         "name": "SOC Maximaal"
+      },
+      "slew_factor": {
+        "name": "Slew-rate-factor"
       }
     },
     "sensor": {
@@ -106,6 +119,9 @@
       },
       "available_kwh": {
         "name": "Beschikbare Energie"
+      },
+      "total_kwh": {
+        "name": "Totale batterijcapaciteit"
       },
       "auto_model": {
         "name": "Batterijprogramma",
@@ -130,6 +146,18 @@
       "aggr_solar": {
         "name": "Totale Zonne-energie"
       },
+      "aggr_grid_input_power": {
+        "name": "Totale netenergie"
+      },
+      "aggr_grid_off_power": {
+        "name": "Totale off-grid-energie"
+      },
+      "grid_input_power": {
+        "name": "Netinvoervermogen"
+      },
+      "grid_off_power": {
+        "name": "Off-grid-vermogen"
+      },
       "plug_state": {
         "name": "Off-grid stekkerdoos",
         "state": {
@@ -149,8 +177,8 @@
           "12": "Verbonden (zenSDK)"
         }
       },
-      "so_h": {
-        "name": "Gezondheidsstatus"
+      "soh": {
+        "name": "SoH"
       },
       "soc_status": {
         "name": "Soc status",
@@ -159,8 +187,20 @@
           "1": "Automatische kalibratie"
         }
       },
+      "soc_limit": {
+        "name": "Status SoC-limiet",
+        "state": {
+          "0": "Normaal",
+          "1": "Begrenzend",
+          "2": "Vol"
+        }
+      },
       "hub_state": {
-        "name": "Hub Status"
+        "name": "Hub Status",
+        "state": {
+          "0": "Uitvoer stoppen en stand-by",
+          "1": "Uitvoer stoppen en uitschakelen"
+        }
       },
       "pack_num": {
         "name": "Batterij Aantal"
@@ -170,9 +210,6 @@
       },
       "electric_level": {
         "name": "Batterij"
-      },
-      "input_limit": {
-        "name": "Invoerlimiet"
       },
       "charging_mode": {
         "name": "Laadmodus",
@@ -223,7 +260,7 @@
         "name": "Elektriciteitsniveau (SoC)"
       },
       "global_soc": {
-         "name": "Globale batterij SOC"
+        "name": "Globale batterij SOC"
       },
       "roundtrip_efficiency": {
         "name": "Retourrendement"
@@ -249,6 +286,9 @@
       "pack_input_power": {
         "name": "Batterij Ontladen"
       },
+      "power": {
+        "name": "Vermogen"
+      },
       "pass": {
         "name": "Bypass",
         "state": {
@@ -257,9 +297,30 @@
           "2": "Aan",
           "3": "Directe netlevering"
         }
-      },      
+      },
+      "hyper_2000_pass": {
+        "name": "Bypass-status"
+      },
       "output_pack_power": {
         "name": "Batterij Laden"
+      },
+      "solar_input_power": {
+        "name": "Zonne-ingangsvermogen"
+      },
+      "solar_power1": {
+        "name": "PV1-zonnevermogen"
+      },
+      "solar_power2": {
+        "name": "PV2-zonnevermogen"
+      },
+      "solar_power3": {
+        "name": "PV3-zonnevermogen"
+      },
+      "solar_power4": {
+        "name": "PV4-zonnevermogen"
+      },
+      "output_home_power": {
+        "name": "Uitgangsvermogen woning"
       },
       "hyper_tmp": {
         "name": "Apparaat Temperatuur"
@@ -282,8 +343,90 @@
       "masterhaer_version": {
         "name": "Hardwareversie"
       },
+      "inverse_max_power": {
+        "name": "Maximaal omvormervermogen"
+      },
+      "grid_power": {
+        "name": "Netvermogen"
+      },
+      "next_calibration": {
+        "name": "Volgende kalibratie"
+      },
+      "switch_count": {
+        "name": "Aantal schakelingen"
+      },
+      "pv_brand": {
+        "name": "Merk omvormer",
+        "state": {
+          "0": "Overig/geïntegreerd",
+          "1": "Hoymiles",
+          "2": "Enphase",
+          "3": "APsystems",
+          "4": "Anker",
+          "5": "Deye",
+          "6": "BossWerk",
+          "7": "TSun"
+        }
+      },
       "delta_voltage": {
         "name": "Spanningsverschil"
+      },
+      "last_message": {
+        "name": "Laatste bericht"
+      },
+      "command_power": {
+        "name": "Opgedragen vermogen"
+      },
+      "command_count": {
+        "name": "Verzonden vermogenscommando's"
+      },
+      "http_errors": {
+        "name": "HTTP-fouten"
+      },
+      "ip_address": {
+        "name": "IP-adres"
+      },
+      "cycle_duration": {
+        "name": "Duur regelcyclus"
+      },
+      "cycle_interval": {
+        "name": "Interval regelcyclus"
+      },
+      "cycle_count": {
+        "name": "Regelcycli"
+      },
+      "last_cycle": {
+        "name": "Laatste regelcyclus"
+      },
+      "p1_value": {
+        "name": "P1-waarde"
+      },
+      "dispatch_setpoint": {
+        "name": "Verdeel-setpoint"
+      },
+      "devices_online": {
+        "name": "Apparaten online"
+      },
+      "devices_charging": {
+        "name": "Apparaten laden"
+      },
+      "devices_discharging": {
+        "name": "Apparaten ontladen"
+      },
+      "devices_idle": {
+        "name": "Apparaten inactief"
+      },
+      "devices_ramping": {
+        "name": "Apparaten in ramp"
+      },
+      "flash_writes": {
+        "name": "Flash-schrijfacties"
+      },
+      "role_discharge": {
+        "name": "Ontlaadapparaat"
+      },
+      "role_charge": {
+        "name": "Laadapparaat"
       }
     },
     "select": {
@@ -385,6 +528,14 @@
           "forbidden": "verboden"
         }
       },
+      "fan_speed": {
+        "name": "Ventilatorsnelheid",
+        "state": {
+          "auto": "Auto",
+          "normal": "Normaal",
+          "fast": "Snel"
+        }
+      },
       "fanspeed": {
         "name": "Ventilatorsnelheid",
         "state": {
@@ -393,17 +544,153 @@
           "fast": "Snel"
         }
       }
+    },
+    "switch": {
+      "lamp_switch": {
+        "name": "LED"
+      },
+      "ac_switch": {
+        "name": "AC-uitgang"
+      },
+      "buzzer_switch": {
+        "name": "Zoemer"
+      },
+      "auto_recover": {
+        "name": "Bypass-modus resetten"
+      },
+      "fan_switch": {
+        "name": "Ventilator"
+      },
+      "fanmode": {
+        "name": "Slimme ventilator"
+      }
     }
   },
-  "switch": {
-    "lamp_switch": {
-      "name": "Led"
+  "exceptions": {
+    "no_zendure_token": {
+      "message": "Zendure-token niet opgegeven."
     },
-    "ac_switch": {
-      "name": "AC-uitgang"
+    "no_user_password": {
+      "message": "Gebruikersnaam of wachtwoord niet opgegeven."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Zendure HA-GP013-instellingen",
+        "description": "P1-sensor: {p1meter}\nToken: {token}\nMQTT: {mqtt}\nVermogensregeling (normaal / snel): {control}\nSlew rate (op / neer, wachttijd richtingwissel): {slew}\nLevensduur: {lifetime}\nVaste apparaatadressen: {addresses}\nMQTT-logging: {logging}, simulatie: {simulation}\n\nKies de instellingen die je wilt wijzigen.",
+        "menu_options": {
+          "connection": "Account / token",
+          "mqtt": "MQTT & Wi-Fi",
+          "p1_meter": "P1-meter",
+          "power_control": "Vermogensregeling",
+          "slew": "Slew rate & richtingwissel",
+          "lifetime": "Levensduur (flash & rollen)",
+          "device_ips": "Apparaatadressen",
+          "diagnostics": "Logging & simulatie",
+          "finish": "Opslaan en sluiten"
+        }
+      },
+      "connection": {
+        "title": "Account / token",
+        "description": "Voer het Zendure-token opnieuw in. Het wordt gecontroleerd bij de Zendure-API voordat het wordt opgeslagen.{detail}",
+        "data": {
+          "token": "Zendure-token"
+        }
+      },
+      "mqtt": {
+        "title": "MQTT & Wi-Fi",
+        "description": "Cloud- of lokale MQTT. Laat de wachtwoordvelden leeg om de opgeslagen wachtwoorden te behouden.{detail}",
+        "data": {
+          "mqttlocal": "Lokale MQTT gebruiken",
+          "mqttserver": "MQTT-server",
+          "mqttport": "MQTT-poort",
+          "mqttuser": "MQTT-gebruiker",
+          "mqttpsw": "MQTT-wachtwoord",
+          "auto_mqtt_user": "MQTT-gebruikers automatisch beheren",
+          "wifissid": "Wifi-SSID",
+          "wifipsw": "Wifi-wachtwoord"
+        }
+      },
+      "p1_meter": {
+        "title": "P1-meter",
+        "description": "De sensor (in W) die het netto vermogen op de netaansluiting meldt.",
+        "data": {
+          "p1meter": "P1-sensor voor slimme afstemming"
+        }
+      },
+      "power_control": {
+        "title": "Vermogensregeling",
+        "description": "Hoe snel en hoe gevoelig de manager de P1-meter volgt. Wijzig met zorg: een korter interval betekent meer commando's naar de apparaten. De P1-meter zelf wordt altijd snel gevolgd; het handmatige interval geldt alleen in handmatige modus.",
+        "data": {
+          "time_zero": "Normaal updateinterval (s)",
+          "time_fast": "Snel updateinterval (s)",
+          "p1_stddev_min": "Minimale P1-verandering (W)",
+          "power_start": "Minimaal vermogen om een apparaat te starten (W)",
+          "power_tolerance": "Vermogenstolerantie apparaat (W)",
+          "manual_interval": "Updateinterval in handmatige modus (s)",
+          "peak_limit": "Piekbegrenzing (W, 0 = uit)"
+        }
+      },
+      "slew": {
+        "title": "Slew rate & richtingwissel",
+        "description": "Beperkt hoe snel het gevraagde vermogen verandert en gaat bij het wisselen tussen laden en ontladen altijd via 0 W (met een korte pauze). Dit beschermt relais en omvormer. De waarden zijn standaardwaarden en geen fabrieksspecificaties. Het apparaat dat klaarstaat voor pieken mag vanuit stand-by sneller starten; een richtingwissel gebruikt altijd de normale snelheid.",
+        "data": {
+          "slew_enabled": "Snelheid van vermogensverandering beperken",
+          "slew_up": "Maximale toename (W/s)",
+          "slew_down": "Maximale afname (W/s)",
+          "flip_delay": "Pauze op 0 W bij richtingwissel (s)",
+          "min_run": "Minimale looptijd van een gestart apparaat (s)",
+          "ready_rate": "Snellere start van het klaarstaande apparaat (W/s)"
+        }
+      },
+      "lifetime": {
+        "title": "Levensduur (flash & rollen)",
+        "description": "Bij meerdere apparaten ontlaadt één apparaat en laadt een ander. Een rol gaat pas naar een ander apparaat als dat zoveel SoC-punten voorloopt en de rol minstens 5 minuten is vastgehouden. De veilige stand slaat één keer 0 W op in de flash van het apparaat, zodat een apparaat dat herstart met 0 W begint; dit gebeurt hooguit één keer per uur. Laden en ontladen gebruiken zo min mogelijk apparaten: een extra apparaat start pas als de lopende dit deel van hun limiet dragen, de rest blijft klaar voor pieken zoals een waterkoker.",
+        "data": {
+          "role_margin": "Marge voor rolwissel (SoC %)",
+          "fill_level": "Belasting per apparaat voordat er nog een start (%)",
+          "flash_safe_state": "Veilige stand (0 W) in flash van apparaat opslaan"
+        }
+      },
+      "device_ips": {
+        "title": "Apparaatadressen",
+        "description": "Vast IP-adres of hostnaam per zenSDK-apparaat. Dit gaat voor op het adres uit de cloud en mDNS, handig over VLAN's heen. Laat leeg voor automatische detectie.\n\n{devices}"
+      },
+      "diagnostics": {
+        "title": "Logging & simulatie",
+        "description": "Foutopsporingsopties.",
+        "data": {
+          "mqttlog": "MQTT-communicatie loggen",
+          "simulation": "Simulatiemodus"
+        }
+      }
     },
-    "fanmode": {
-      "name": "Slimme Koelventilator"
+    "error": {
+      "cannot_connect": "De Zendure-API is niet bereikbaar. Controleer je internetverbinding en probeer het opnieuw.",
+      "malformed_token": "Het token is niet geldig. Kopieer het Home Assistant-token opnieuw uit de Zendure-app (Instellingen, Ontwikkelaar).",
+      "api_rejected": "Zendure heeft het verzoek geweigerd: {detail}",
+      "no_devices": "Token geaccepteerd, maar er zijn geen apparaten gevonden op dit account. Gebruik het Zendure-account waarop het apparaat is geregistreerd, en de juiste regio.",
+      "no_mqtt": "Token geaccepteerd, maar er is geen MQTT-server teruggegeven. Schakel lokale of cloud-MQTT voor dit account in via de Zendure-app.",
+      "invalid_auth": "Ongeldige authenticatie",
+      "unknown": "Onverwachte fout",
+      "mqtt_server_required": "Voer het adres van de MQTT-server in.",
+      "fast_longer_than_normal": "Het snelle interval mag niet langer zijn dan het normale interval.",
+      "invalid_address": "Voer een geldig IP-adres of een geldige hostnaam in."
+    }
+  },
+  "issues": {
+    "zensdk_unreachable": {
+      "title": "{name} reageert niet",
+      "description": "Het Zendure-apparaat {name} ({address}) reageerde niet op herhaalde lokale zenSDK-verzoeken. Controleer de voeding en wifi van het apparaat, het IP-adres (Configureren, Apparaatadressen) en het netwerk tussen Home Assistant en het apparaat. De melding verdwijnt zodra het apparaat weer antwoordt."
+    },
+    "mqtt_cloud_disconnected": {
+      "title": "Zendure-cloud-MQTT is niet verbonden",
+      "description": "Home Assistant is niet verbonden met de Zendure-cloud-MQTT-server {server}. Apparaten die hiervan afhangen kunnen niet worden aangestuurd. Controleer je internetverbinding en het token. De melding verdwijnt zodra de verbinding hersteld is."
+    },
+    "mqtt_local_disconnected": {
+      "title": "Lokale MQTT-broker is niet verbonden",
+      "description": "Home Assistant is niet verbonden met de lokale MQTT-server {server}. Controleer of de broker draait en of gebruiker en wachtwoord kloppen. De melding verdwijnt zodra de verbinding hersteld is."
     }
   }
 }

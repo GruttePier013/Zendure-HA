@@ -25,6 +25,17 @@
           "wifipsw": "Wifi Passwort"
         }
       },
+      "local": {
+        "data": {
+          "mqttserver": "MQTT-Server",
+          "mqttport": "MQTT-Port",
+          "mqttuser": "MQTT-Benutzer",
+          "mqttpsw": "MQTT-Passwort",
+          "auto_mqtt_user": "MQTT-Benutzer automatisch verwalten",
+          "wifissid": "WLAN-SSID",
+          "wifipsw": "WLAN-Passwort"
+        }
+      },
       "reconfigure": {
         "data": {
           "token": "Zendure Token",
@@ -35,19 +46,6 @@
           "wifissid": "WLAN SSID",
           "wifipsw": "Wifi Passwort"
         }
-      }
-    }
-  },
-  "options": {
-    "step": {
-      "init": {
-        "data": {
-          "p1meter": "P1 Sensor für Smart Matching",
-          "mqttlog": "MQTT-Kommunikation loggen",
-          "auto_mqtt_user": "MQTT-Benutzer automatisch verwalten"
-        },
-        "description": "Optionen anpassen",
-        "title": "Zendure Integrationsoptionen"
       }
     }
   },
@@ -84,6 +82,15 @@
       },
       "hems_state": {
         "name": "HEMS aktiv"
+      },
+      "slew_active": {
+        "name": "Rampe aktiv (Slew-begrenzt)"
+      },
+      "mqtt_cloud": {
+        "name": "Cloud-MQTT verbunden"
+      },
+      "mqtt_local": {
+        "name": "Lokales MQTT verbunden"
       }
     },
     "number": {
@@ -101,6 +108,9 @@
       },
       "soc_set": {
         "name": "SoC-Zielwert"
+      },
+      "slew_factor": {
+        "name": "Slew-Rate-Faktor"
       }
     },
     "sensor": {
@@ -270,6 +280,9 @@
       "batcur": {
         "name": "Batteriestrom"
       },
+      "bat_in_out": {
+        "name": "Batterieleistung"
+      },
       "pack_input_power": {
         "name": "Batterieentladeleistung"
       },
@@ -287,9 +300,6 @@
       },
       "hyper_2000_pass": {
         "name": "Bypass-Status"
-      },
-      "bat_in_out": {
-        "name": "Batterieleistung"
       },
       "output_pack_power": {
         "name": "Batterieladeleistung"
@@ -360,6 +370,63 @@
       },
       "delta_voltage": {
         "name": "Spannungsdifferenz"
+      },
+      "last_message": {
+        "name": "Letzte Nachricht"
+      },
+      "command_power": {
+        "name": "Angeforderte Leistung"
+      },
+      "command_count": {
+        "name": "Gesendete Leistungsbefehle"
+      },
+      "http_errors": {
+        "name": "HTTP-Fehler"
+      },
+      "ip_address": {
+        "name": "IP-Adresse"
+      },
+      "cycle_duration": {
+        "name": "Dauer des Regelzyklus"
+      },
+      "cycle_interval": {
+        "name": "Intervall des Regelzyklus"
+      },
+      "cycle_count": {
+        "name": "Regelzyklen"
+      },
+      "last_cycle": {
+        "name": "Letzter Regelzyklus"
+      },
+      "p1_value": {
+        "name": "P1-Wert"
+      },
+      "dispatch_setpoint": {
+        "name": "Verteilungs-Sollwert"
+      },
+      "devices_online": {
+        "name": "Geräte online"
+      },
+      "devices_charging": {
+        "name": "Ladende Geräte"
+      },
+      "devices_discharging": {
+        "name": "Entladende Geräte"
+      },
+      "devices_idle": {
+        "name": "Inaktive Geräte"
+      },
+      "devices_ramping": {
+        "name": "Geräte mit aktiver Rampe"
+      },
+      "flash_writes": {
+        "name": "Flash-Schreibvorgänge"
+      },
+      "role_discharge": {
+        "name": "Entladegerät"
+      },
+      "role_charge": {
+        "name": "Ladegerät"
       }
     },
     "select": {
@@ -505,6 +572,125 @@
     },
     "no_user_password": {
       "message": "Benutzername und Passwort nicht vorhanden."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Zendure HA-GP013 – Einstellungen",
+        "description": "P1-Sensor: {p1meter}\nToken: {token}\nMQTT: {mqtt}\nLeistungsregelung (normal / schnell): {control}\nSlew-Rate (hoch / runter, Wartezeit Richtungswechsel): {slew}\nLebensdauer: {lifetime}\nFeste Geräteadressen: {addresses}\nMQTT-Protokollierung: {logging}, Simulation: {simulation}\n\nWähle die Einstellungen, die du ändern möchtest.",
+        "menu_options": {
+          "connection": "Konto / Token",
+          "mqtt": "MQTT & WLAN",
+          "p1_meter": "P1-Zähler",
+          "power_control": "Leistungsregelung",
+          "slew": "Slew-Rate & Richtungswechsel",
+          "lifetime": "Lebensdauer (Flash & Rollen)",
+          "device_ips": "Geräteadressen",
+          "diagnostics": "Protokollierung & Simulation",
+          "finish": "Speichern und schließen"
+        }
+      },
+      "connection": {
+        "title": "Konto / Token",
+        "description": "Gib das Zendure-Token erneut ein. Es wird vor dem Speichern bei der Zendure-API geprüft.{detail}",
+        "data": {
+          "token": "Zendure-Token"
+        }
+      },
+      "mqtt": {
+        "title": "MQTT & WLAN",
+        "description": "Cloud- oder lokales MQTT. Lass die Passwortfelder leer, um die gespeicherten Passwörter zu behalten.{detail}",
+        "data": {
+          "mqttlocal": "Lokales MQTT verwenden",
+          "mqttserver": "MQTT-Server",
+          "mqttport": "MQTT-Port",
+          "mqttuser": "MQTT-Benutzer",
+          "mqttpsw": "MQTT-Passwort",
+          "auto_mqtt_user": "MQTT-Benutzer automatisch verwalten",
+          "wifissid": "WLAN-SSID",
+          "wifipsw": "WLAN-Passwort"
+        }
+      },
+      "p1_meter": {
+        "title": "P1-Zähler",
+        "description": "Der Sensor (in W), der die Nettoleistung am Netzanschluss meldet.",
+        "data": {
+          "p1meter": "P1-Sensor für Smart Matching"
+        }
+      },
+      "power_control": {
+        "title": "Leistungsregelung",
+        "description": "Wie schnell und wie empfindlich der Manager dem P1-Zähler folgt. Mit Vorsicht ändern: ein kürzeres Intervall bedeutet mehr Befehle an die Geräte. Der P1-Zähler selbst wird immer schnell verfolgt; das manuelle Intervall gilt nur im manuellen Modus.",
+        "data": {
+          "time_zero": "Normales Aktualisierungsintervall (s)",
+          "time_fast": "Schnelles Aktualisierungsintervall (s)",
+          "p1_stddev_min": "Minimale P1-Änderung (W)",
+          "power_start": "Mindestleistung zum Starten eines Geräts (W)",
+          "power_tolerance": "Leistungstoleranz des Geräts (W)",
+          "manual_interval": "Aktualisierungsintervall im manuellen Modus (s)",
+          "peak_limit": "Spitzenkappung (W, 0 = aus)"
+        }
+      },
+      "slew": {
+        "title": "Slew-Rate & Richtungswechsel",
+        "description": "Begrenzt, wie schnell sich die angeforderte Leistung ändert, und läuft beim Wechsel zwischen Laden und Entladen immer über 0 W (mit kurzer Pause). Das schont Relais und Wechselrichter. Die Werte sind Standardwerte und keine Herstellerangaben. Das für Spitzen bereitstehende Gerät darf aus dem Standby schneller starten; ein Richtungswechsel nutzt immer die normale Rate.",
+        "data": {
+          "slew_enabled": "Änderungsrate der Leistung begrenzen",
+          "slew_up": "Maximaler Anstieg (W/s)",
+          "slew_down": "Maximaler Abfall (W/s)",
+          "flip_delay": "Pause bei 0 W beim Richtungswechsel (s)",
+          "min_run": "Mindestlaufzeit eines gestarteten Geräts (s)",
+          "ready_rate": "Schnellerer Start des bereitstehenden Geräts (W/s)"
+        }
+      },
+      "lifetime": {
+        "title": "Lebensdauer (Flash & Rollen)",
+        "description": "Bei mehreren Geräten entlädt ein Gerät und ein anderes lädt. Eine Rolle wechselt erst zu einem anderen Gerät, wenn es so viele SoC-Punkte führt und die Rolle mindestens 5 Minuten gehalten wurde. Der sichere Zustand speichert einmalig 0 W im Flash des Geräts, damit ein neu startendes Gerät mit 0 W beginnt; er wird höchstens einmal pro Stunde geschrieben. Laden und Entladen nutzen so wenige Geräte wie nötig: ein weiteres Gerät startet erst, wenn die laufenden diesen Anteil ihres Limits tragen; die übrigen bleiben für Spitzen wie einen Wasserkocher bereit.",
+        "data": {
+          "role_margin": "Spielraum für Rollenwechsel (SoC %)",
+          "fill_level": "Last pro Gerät, bevor ein weiteres startet (%)",
+          "flash_safe_state": "Sicheren Zustand (0 W) im Flash des Geräts speichern"
+        }
+      },
+      "device_ips": {
+        "title": "Geräteadressen",
+        "description": "Feste IP-Adresse oder Hostname pro zenSDK-Gerät. Sie hat Vorrang vor der Adresse aus der Cloud und mDNS, nützlich über VLANs hinweg. Leer lassen für automatische Erkennung.\n\n{devices}"
+      },
+      "diagnostics": {
+        "title": "Protokollierung & Simulation",
+        "description": "Debug-Optionen.",
+        "data": {
+          "mqttlog": "MQTT-Kommunikation protokollieren",
+          "simulation": "Simulationsmodus"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Die Zendure-API ist nicht erreichbar. Prüfe deine Internetverbindung und versuche es erneut.",
+      "malformed_token": "Das Token ist ungültig. Kopiere das Home-Assistant-Token erneut aus der Zendure-App (Einstellungen, Entwickler).",
+      "api_rejected": "Zendure hat die Anfrage abgelehnt: {detail}",
+      "no_devices": "Token akzeptiert, aber auf diesem Konto wurden keine Geräte gefunden. Verwende das Zendure-Konto, bei dem das Gerät registriert ist, und die richtige Region.",
+      "no_mqtt": "Token akzeptiert, aber es wurde kein MQTT-Server zurückgegeben. Aktiviere lokales oder Cloud-MQTT für dieses Konto in der Zendure-App.",
+      "invalid_auth": "Ungültige Authentifizierung",
+      "unknown": "Unerwarteter Fehler",
+      "mqtt_server_required": "Gib die Adresse des MQTT-Servers ein.",
+      "fast_longer_than_normal": "Das schnelle Intervall darf nicht länger als das normale Intervall sein.",
+      "invalid_address": "Gib eine gültige IP-Adresse oder einen gültigen Hostnamen ein."
+    }
+  },
+  "issues": {
+    "zensdk_unreachable": {
+      "title": "{name} antwortet nicht",
+      "description": "Das Zendure-Gerät {name} ({address}) hat auf wiederholte lokale zenSDK-Anfragen nicht geantwortet. Prüfe Stromversorgung und WLAN des Geräts, die IP-Adresse (Konfigurieren, Geräteadressen) und das Netzwerk zwischen Home Assistant und dem Gerät. Die Meldung verschwindet, sobald das Gerät wieder antwortet."
+    },
+    "mqtt_cloud_disconnected": {
+      "title": "Zendure-Cloud-MQTT ist nicht verbunden",
+      "description": "Home Assistant ist nicht mit dem Zendure-Cloud-MQTT-Server {server} verbunden. Davon abhängige Geräte können nicht gesteuert werden. Prüfe deine Internetverbindung und das Token. Die Meldung verschwindet, sobald die Verbindung wiederhergestellt ist."
+    },
+    "mqtt_local_disconnected": {
+      "title": "Lokaler MQTT-Broker ist nicht verbunden",
+      "description": "Home Assistant ist nicht mit dem lokalen MQTT-Server {server} verbunden. Prüfe, ob der Broker läuft und Benutzer und Passwort stimmen. Die Meldung verschwindet, sobald die Verbindung wiederhergestellt ist."
     }
   }
 }
