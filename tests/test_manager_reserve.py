@@ -209,8 +209,8 @@ def test_crossflow_is_logged_once_after_a_few_cycles(caplog) -> None:  # noqa: A
     other = _FakeDevice(pwr_max=2400, electric_level=80)
     charging[0].name, other.name = "A", "B"
     manager.discharge = [other]
-    for _ in range(7):
-        manager._check_crossflow()
+    for k in range(20):
+        manager._check_crossflow(T0 + timedelta(seconds=k))  # 20 s with charging and discharging at once
     assert sum("does not follow" in r.message for r in caplog.records) == 1
     manager.discharge = []
     manager._check_crossflow()
@@ -304,3 +304,100 @@ async def test_charger_is_released_after_the_clouds_stay_away() -> None:
         assert devices[2].charge_calls[-1] != 0  # the 4200 W peak is less than 3 minutes (+30 s) ago
     await _cycle(manager, devices, -1000, T0 + timedelta(seconds=240))
     assert devices[2].charge_calls[-1] == 0
+
+
+async def test_idle_role_holders_are_prepared() -> None:
+    from custom_components.zendure_ha.const import ManagerMode
+
+    manager = _make_manager_harness()
+    manager.operation = ManagerMode.MATCHING
+    charger, discharger = _idle(30), _idle(80)
+    calls = []
+
+    async def prep_c(direction: int) -> bool:
+        calls.append(("c", direction))
+        return True
+
+    async def prep_d(direction: int) -> bool:
+        calls.append(("d", direction))
+        return True
+
+    charger.prepare, discharger.prepare = prep_c, prep_d
+    manager.idle = [charger, discharger]
+    manager.roles.charger, manager.roles.discharger = charger.deviceId, discharger.deviceId
+    await manager._prepare_roles()
+    assert calls == [("c", -1), ("d", 1)]
+
+
+async def test_below_about_2000_w_two_chargers_become_one() -> None:
+    """Default fill level 85 %: 1800 W on two 2400 W devices is consolidated to one (better efficiency)."""
+    manager, devices = _charging([40, 70])
+    assert manager.fill_level == 85
+    await _cycle(manager, devices, -1800, T0)
+    await _cycle(manager, devices, -1800, T0 + timedelta(seconds=31))
+    assert devices[1].charge_calls[-1] == 0
+    assert devices[0].charge_calls[-1] == -1800
+
+
+async def test_above_about_2000_w_two_chargers_stay() -> None:
+    manager, devices = _charging([40, 70])
+    for k in range(3):
+        await _cycle(manager, devices, -2100, T0 + timedelta(seconds=40 * k))
+    assert all(d.charge_calls[-1] != 0 for d in devices)
+
+
+class _Sink:
+    def __init__(self) -> None:
+        self.value = None
+        self.hass = None
+        self._attr_extra_state_attributes = None
+
+    def update_value(self, value):  # noqa: ANN001, ANN201
+        changed = value != self.value
+        self.value = value
+        return changed
+
+
+def test_role_sensors_show_what_the_device_does_now() -> None:
+    from types import SimpleNamespace
+
+    manager = _make_manager_harness()
+    a, b, c = _idle(40), _idle(50), _idle(80)
+    for d, name in ((a, "L1"), (b, "L2"), (c, "L3")):
+        d.name = name
+    manager.devices = [a, b, c]
+    manager.charge, manager.discharge, manager.idle = [], [c], [b]  # a does not respond
+    manager.roles.charger, manager.roles.discharger = b.deviceId, c.deviceId
+    manager.roleCharge, manager.roleDischarge = _Sink(), _Sink()
+    manager.hass = SimpleNamespace(config=SimpleNamespace(language="nl"))
+    manager._show_roles()
+    assert manager.roleCharge.value == "L2 (stand-by)"  # ready to charge, not charging: matches 'devices charging 0'
+    assert manager.roleDischarge.value == "L3 (ontladen)"
+    manager.roles.charger = a.deviceId
+    manager._show_roles()
+    assert manager.roleCharge.value == "L1 (reageert niet)"
+
+
+def test_count_sensors_carry_the_device_names() -> None:
+    manager = _make_manager_harness()
+    a, b = _idle(40), _idle(50)
+    a.name, b.name = "L1", "L2"
+    sensor = _Sink()
+    manager._set_devices(sensor, [b, a])
+    assert sensor.value == 2
+    assert sensor._attr_extra_state_attributes == {"devices": ["L1", "L2"]}
+
+
+def test_every_device_gets_its_activity_and_role() -> None:
+    manager = _make_manager_harness()
+    a, b, c = _idle(40), _idle(50), _idle(80)
+    for d, name in ((a, "L1"), (b, "L2"), (c, "L3")):
+        d.name, d.activity, d.role = name, _Sink(), _Sink()
+    manager.devices = [a, b, c]
+    manager.charge, manager.discharge, manager.idle = [], [c], [a, b]
+    manager.roles.charger, manager.roles.discharger = b.deviceId, c.deviceId
+    manager.roleCharge, manager.roleDischarge = _Sink(), _Sink()
+    manager._show_roles()
+    assert (a.activity.value, a.role.value) == ("standby", "none")
+    assert (b.activity.value, b.role.value) == ("standby", "charge")
+    assert (c.activity.value, c.role.value) == ("discharging", "discharge")

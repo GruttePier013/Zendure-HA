@@ -91,6 +91,9 @@
       },
       "mqtt_local": {
         "name": "Lokale MQTT verbonden"
+      },
+      "cloud_mode": {
+        "name": "Wolkenmodus (wisselvallig)"
       }
     },
     "number": {
@@ -423,10 +426,31 @@
         "name": "Flash-schrijfacties"
       },
       "role_discharge": {
-        "name": "Ontlaadapparaat"
+        "name": "Ontlaadrol"
       },
       "role_charge": {
-        "name": "Laadapparaat"
+        "name": "Laadrol"
+      },
+      "devices_not_responding": {
+        "name": "Apparaten die niet reageren"
+      },
+      "activity": {
+        "name": "Activiteit",
+        "state": {
+          "charging": "Opladen",
+          "discharging": "Ontladen",
+          "standby": "Stand-by",
+          "reserve": "Stand-by (wolkenreserve)",
+          "not_responding": "Reageert niet"
+        }
+      },
+      "role": {
+        "name": "Rol",
+        "state": {
+          "charge": "Opladen",
+          "discharge": "Ontladen",
+          "none": "Geen rol"
+        }
       }
     },
     "select": {
@@ -499,8 +523,8 @@
           "off": "Uit",
           "manual": "Handmatig Vermogen",
           "smart": "Slimme Matching",
-          "smart_discharging": "Slim ontladen",
-          "smart_charging": "Slim opladen",
+          "discharge": "Slim ontladen",
+          "charge": "Slim opladen",
           "store_solar": "Zonne-energie opslaan"
         }
       },
@@ -578,16 +602,16 @@
     "step": {
       "init": {
         "title": "Zendure HA-GP013-instellingen",
-        "description": "P1-sensor: {p1meter}\nToken: {token}\nMQTT: {mqtt}\nVermogensregeling (normaal / snel): {control}\nSlew rate (op / neer, wachttijd richtingwissel): {slew}\nLevensduur: {lifetime}\nVaste apparaatadressen: {addresses}\nMQTT-logging: {logging}, simulatie: {simulation}\n\nKies de instellingen die je wilt wijzigen.",
+        "description": "P1-sensor: {p1meter}\nToken: {token}\nMQTT: {mqtt}\nVermogensregeling (normaal / snel): {control}\nSlew rate (op / neer, wachttijd richtingwissel): {slew}\nMeerdere omvormers: {lifetime}\nVaste apparaatadressen: {addresses}\nMQTT-logging: {logging}, simulatie: {simulation}\n\nKies de instellingen die je wilt wijzigen.",
         "menu_options": {
           "connection": "Account / token",
           "mqtt": "MQTT & Wi-Fi",
           "p1_meter": "P1-meter",
           "power_control": "Vermogensregeling",
           "slew": "Slew rate & richtingwissel",
-          "lifetime": "Levensduur (flash & rollen)",
+          "lifetime": "Meerdere omvormers (spreiden & rollen)",
           "device_ips": "Apparaatadressen",
-          "diagnostics": "Logging & simulatie",
+          "diagnostics": "Logging, simulatie en testdata",
           "finish": "Opslaan en sluiten"
         }
       },
@@ -614,9 +638,13 @@
       },
       "p1_meter": {
         "title": "P1-meter",
-        "description": "De sensor (in W) die het netto vermogen op de netaansluiting meldt.",
+        "description": "De sensor (in W) die het netto vermogen op de netaansluiting meldt. Een HomeWizard P1-meter kan ook direct worden uitgelezen: de manager krijgt dan elke seconde een nieuwe waarde in plaats van ongeveer elke 5 seconden (de Home Assistant-sensor blijft de terugval). Laat het adres leeg om alleen de sensor te gebruiken.",
         "data": {
-          "p1meter": "P1-sensor voor slimme afstemming"
+          "p1meter": "P1-sensor voor slimme afstemming",
+          "p1_homewizard": "Adres van de HomeWizard P1-meter (optioneel, elke seconde uitgelezen)"
+        },
+        "data_description": {
+          "p1_homewizard": "IP-adres van de HomeWizard P1-meter. Met een token wordt API v2 gebruikt (WebSocket, de meter stuurt elk telegram door); het token van de HomeWizard-integratie wordt gebruikt als die er een heeft."
         }
       },
       "power_control": {
@@ -629,40 +657,52 @@
           "power_start": "Minimaal vermogen om een apparaat te starten (W)",
           "power_tolerance": "Vermogenstolerantie apparaat (W)",
           "manual_interval": "Updateinterval in handmatige modus (s)",
-          "peak_limit": "Piekbegrenzing (W, 0 = uit)"
+          "peak_limit": "Piekbegrenzing (W, 0 = uit)",
+          "export_bias": "Exportmarge tijdens laden bij wisselende bewolking (W, 0 = uit)"
         }
       },
       "slew": {
         "title": "Slew rate & richtingwissel",
-        "description": "Beperkt hoe snel het gevraagde vermogen verandert en gaat bij het wisselen tussen laden en ontladen altijd via 0 W (met een korte pauze). Dit beschermt relais en omvormer. De waarden zijn standaardwaarden en geen fabrieksspecificaties. Het apparaat dat klaarstaat voor pieken mag vanuit stand-by sneller starten; een richtingwissel gebruikt altijd de normale snelheid.",
+        "description": "Beperkt hoe snel het gevraagde vermogen verandert en gaat bij het wisselen tussen laden en ontladen altijd via 0 W (met een korte pauze). Dit beschermt relais en omvormer. De waarden zijn standaardwaarden en geen fabrieksspecificaties. Het apparaat dat klaarstaat voor pieken mag vanuit stand-by sneller starten; een richtingwissel gebruikt altijd de normale snelheid. Een richtingwissel gaat na 2 s door zodra het apparaat 0 W meldt, anders na de maximale pauze.",
         "data": {
           "slew_enabled": "Snelheid van vermogensverandering beperken",
           "slew_up": "Maximale toename (W/s)",
           "slew_down": "Maximale afname (W/s)",
-          "flip_delay": "Pauze op 0 W bij richtingwissel (s)",
+          "flip_delay": "Maximale pauze op 0 W bij richtingwissel, zonder bevestigde 0 W (s)",
           "min_run": "Minimale looptijd van een gestart apparaat (s)",
-          "ready_rate": "Snellere start van het klaarstaande apparaat (W/s)"
+          "ready_rate": "Snellere opbouw: start van het klaarstaande apparaat en apparaten die al in dezelfde richting draaien (W/s)"
         }
       },
       "lifetime": {
-        "title": "Levensduur (flash & rollen)",
-        "description": "Bij meerdere apparaten ontlaadt één apparaat en laadt een ander. Een rol gaat pas naar een ander apparaat als dat zoveel SoC-punten voorloopt en de rol minstens 5 minuten is vastgehouden. De veilige stand slaat één keer 0 W op in de flash van het apparaat, zodat een apparaat dat herstart met 0 W begint; dit gebeurt hooguit één keer per uur. Laden en ontladen gebruiken zo min mogelijk apparaten: een extra apparaat start pas als de lopende dit deel van hun limiet dragen, de rest blijft klaar voor pieken zoals een waterkoker.",
+        "title": "Meerdere omvormers: spreiden, rollen en flash",
+        "description": "Bij meerdere omvormers gebruiken laden en ontladen zo min mogelijk omvormers (beter rendement): een extra omvormer start pas als de lopende de spreiddrempel van hun limiet dragen, en daaronder wordt het vermogen weer samengevoegd op minder omvormers. De rest blijft klaar voor pieken zoals een waterkoker. Eén omvormer ontlaadt en een andere laadt; een rol gaat pas naar een andere omvormer als die de rolwisselmarge in SoC voorloopt en de rol minstens 5 minuten is vastgehouden. De veilige stand slaat één keer 0 W op in de flash van het apparaat, zodat een omvormer die herstart met 0 W begint; dit gebeurt hooguit één keer per uur.",
         "data": {
-          "role_margin": "Marge voor rolwissel (SoC %)",
-          "fill_level": "Belasting per apparaat voordat er nog een start (%)",
+          "role_margin": "Rolwisselmarge (SoC %)",
+          "fill_level": "Spreiddrempel (%)",
           "flash_safe_state": "Veilige stand (0 W) in flash van apparaat opslaan"
+        },
+        "data_description": {
+          "fill_level": "Belasting per omvormer voordat het vermogen over nog een omvormer wordt gespreid; daaronder wordt het samengevoegd op minder. 85% bij 3 × 2400 W: 1 omvormer tot ongeveer 1900–2000 W. Bij snel wisselende bewolking geldt 70%."
         }
       },
       "device_ips": {
         "title": "Apparaatadressen",
-        "description": "Vast IP-adres of hostnaam per zenSDK-apparaat. Dit gaat voor op het adres uit de cloud en mDNS, handig over VLAN's heen. Laat leeg voor automatische detectie.\n\n{devices}"
+        "description": "Vast IP-adres of hostnaam per zenSDK-apparaat. Dit gaat voor op het adres uit de cloud en mDNS, handig over VLAN's heen. Laat leeg voor automatische detectie. Staat er GUESSED, dan gaf de cloud geen IP: vul dan het IP-adres in.\n\n{devices}"
       },
       "diagnostics": {
-        "title": "Logging & simulatie",
-        "description": "Foutopsporingsopties.",
+        "title": "Logging, simulatie en testdata",
+        "description": "Foutopsporingsopties. De P1-opname schrijft elke P1-waarde (elke seconde bij een direct uitgelezen HomeWizard P1-meter) met het batterijvermogen naar <config>/zendure_ha/p1_<datum>.csv, als testdata voor de simulatie. Hij schakelt zichzelf om middernacht uit.",
         "data": {
           "mqttlog": "MQTT-communicatie loggen",
-          "simulation": "Simulatiemodus"
+          "simulation": "Simulatiemodus",
+          "p1_record": "P1 elke seconde opnemen tot middernacht (testdata)"
+        }
+      },
+      "p1_token": {
+        "title": "HomeWizard P1-meter: token",
+        "description": "Om de P1-meter op {host} via API v2 uit te lezen is een token nodig. Druk op de knop van de P1-meter en klik binnen 30 seconden op Verzenden.\n\nOf vink API v1 aan: dan wordt de meter elke seconde via de Lokale API uitgelezen (zet \"Lokale API\" aan in de HomeWizard-app).",
+        "data": {
+          "use_v1": "API v1 (Lokale API) gebruiken in plaats van een token"
         }
       }
     },
@@ -676,7 +716,10 @@
       "unknown": "Onverwachte fout",
       "mqtt_server_required": "Voer het adres van de MQTT-server in.",
       "fast_longer_than_normal": "Het snelle interval mag niet langer zijn dan het normale interval.",
-      "invalid_address": "Voer een geldig IP-adres of een geldige hostnaam in."
+      "invalid_address": "Voer een geldig IP-adres of een geldige hostnaam in.",
+      "homewizard_press_button": "De P1-meter gaf nog geen token: druk op de knop en klik binnen 30 seconden op Verzenden.",
+      "homewizard_unreachable": "De HomeWizard P1-meter antwoordt niet op dit adres.",
+      "homewizard_v1_unreachable": "De P1-meter antwoordt niet via API v1: zet \"Lokale API\" aan in de HomeWizard-app."
     }
   },
   "issues": {
@@ -691,6 +734,10 @@
     "mqtt_local_disconnected": {
       "title": "Lokale MQTT-broker is niet verbonden",
       "description": "Home Assistant is niet verbonden met de lokale MQTT-server {server}. Controleer of de broker draait en of gebruiker en wachtwoord kloppen. De melding verdwijnt zodra de verbinding hersteld is."
+    },
+    "zensdk_no_address": {
+      "title": "Geen adres bekend voor {name}",
+      "description": "De Zendure-cloud gaf geen IP-adres voor {name}, dus probeerde de integratie de samengestelde naam {address}, die niet antwoordt. Vul het IP-adres van het apparaat in (Zendure-app, apparaatinformatie, of de DHCP-lijst van je router) bij Configureren, Apparaatadressen. Een vast DHCP-adres wordt aangeraden. Tot dan werkt het apparaat alleen met de verbinding op cloud."
     }
   }
 }

@@ -91,6 +91,9 @@
       },
       "mqtt_local": {
         "name": "Local MQTT connected"
+      },
+      "cloud_mode": {
+        "name": "Changing clouds mode"
       }
     },
     "number": {
@@ -423,10 +426,31 @@
         "name": "Flash writes"
       },
       "role_discharge": {
-        "name": "Discharge device"
+        "name": "Discharge role"
       },
       "role_charge": {
-        "name": "Charge device"
+        "name": "Charge role"
+      },
+      "devices_not_responding": {
+        "name": "Devices not responding"
+      },
+      "activity": {
+        "name": "Activity",
+        "state": {
+          "charging": "Charging",
+          "discharging": "Discharging",
+          "standby": "Standby",
+          "reserve": "Standby (cloud reserve)",
+          "not_responding": "Not responding"
+        }
+      },
+      "role": {
+        "name": "Role",
+        "state": {
+          "charge": "Ready to charge",
+          "discharge": "Ready to discharge",
+          "none": "No role"
+        }
       }
     },
     "select": {
@@ -499,8 +523,8 @@
           "off": "Off",
           "manual": "Manual Power",
           "smart": "Smart Matching",
-          "smart_discharging": "Smart discharge only",
-          "smart_charging": "Smart charge only",
+          "discharge": "Smart discharge only",
+          "charge": "Smart charge only",
           "store_solar": "Store Solar"
         }
       },
@@ -578,16 +602,16 @@
     "step": {
       "init": {
         "title": "Zendure HA-GP013 settings",
-        "description": "P1 sensor: {p1meter}\nToken: {token}\nMQTT: {mqtt}\nPower control (normal / fast): {control}\nSlew rate (up / down, direction change delay): {slew}\nLifetime: {lifetime}\nFixed device addresses: {addresses}\nMQTT logging: {logging}, simulation: {simulation}\n\nChoose the settings you want to change.",
+        "description": "P1 sensor: {p1meter}\nToken: {token}\nMQTT: {mqtt}\nPower control (normal / fast): {control}\nSlew rate (up / down, direction change delay): {slew}\nMultiple inverters: {lifetime}\nFixed device addresses: {addresses}\nMQTT logging: {logging}, simulation: {simulation}\n\nChoose the settings you want to change.",
         "menu_options": {
           "connection": "Account / token",
           "mqtt": "MQTT & Wi-Fi",
           "p1_meter": "P1 meter",
           "power_control": "Power control",
           "slew": "Slew rate & direction change",
-          "lifetime": "Lifetime (flash & roles)",
+          "lifetime": "Multiple inverters (spread & roles)",
           "device_ips": "Device addresses",
-          "diagnostics": "Logging & simulation",
+          "diagnostics": "Logging, simulation and test data",
           "finish": "Save and close"
         }
       },
@@ -614,9 +638,13 @@
       },
       "p1_meter": {
         "title": "P1 meter",
-        "description": "The sensor (in W) that reports the net power at the grid connection.",
+        "description": "The sensor (in W) that reports the net power at the grid connection. A HomeWizard P1 meter can also be read directly: then the manager gets a new value every second instead of about every 5 seconds (the Home Assistant sensor remains the fallback). Leave the address empty to only use the sensor.",
         "data": {
-          "p1meter": "P1 Sensor for smart matching"
+          "p1meter": "P1 Sensor for smart matching",
+          "p1_homewizard": "Address of the HomeWizard P1 meter (optional, read every second)"
+        },
+        "data_description": {
+          "p1_homewizard": "IP address of the HomeWizard P1 meter. API v2 (WebSocket, the meter pushes every telegram) is used with a token; the token of the HomeWizard integration is used when it has one."
         }
       },
       "power_control": {
@@ -629,40 +657,52 @@
           "power_start": "Minimum power to start a device (W)",
           "power_tolerance": "Device power tolerance (W)",
           "manual_interval": "Update interval in manual mode (s)",
-          "peak_limit": "Peak shaving limit (W, 0 = off)"
+          "peak_limit": "Peak shaving limit (W, 0 = off)",
+          "export_bias": "Export margin while charging during changing clouds (W, 0 = off)"
         }
       },
       "slew": {
         "title": "Slew rate & direction change",
-        "description": "Limits how fast the commanded power changes, and always passes through 0 W (with a short pause) when switching between charging and discharging. This protects relays and inverter. Values are defaults and not firmware specifications. The device that is kept ready for peaks may start faster from standby; direction changes always use the normal rate.",
+        "description": "Limits how fast the commanded power changes, and always passes through 0 W (with a short pause) when switching between charging and discharging. This protects relays and inverter. Values are defaults and not firmware specifications. The device that is kept ready for peaks may start faster from standby; direction changes always use the normal rate. A direction change is released after 2 s as soon as the device reports 0 W, otherwise after the maximum pause.",
         "data": {
           "slew_enabled": "Limit the power change rate",
           "slew_up": "Maximum increase (W/s)",
           "slew_down": "Maximum decrease (W/s)",
-          "flip_delay": "Pause at 0 W when changing direction (s)",
+          "flip_delay": "Maximum pause at 0 W when changing direction, without a confirmed 0 W (s)",
           "min_run": "Minimum run time of a started device (s)",
-          "ready_rate": "Faster start of the device kept ready (W/s)"
+          "ready_rate": "Faster ramp: start of the ready device and devices already running in the same direction (W/s)"
         }
       },
       "lifetime": {
-        "title": "Lifetime (flash & roles)",
-        "description": "With several devices, one device discharges and another one charges. A role only moves to another device when it leads by this many SoC points and the role was held for at least 5 minutes. The safe state stores 0 W once in the device flash, so a device that reboots starts at 0 W; it is written at most once per hour. Charging and discharging use as few devices as needed: another device only starts when the running ones carry this share of their limit, the others stay ready for peaks such as a kettle.",
+        "title": "Multiple inverters: spread, roles and flash",
+        "description": "With several inverters, charging and discharging use as few inverters as needed (better efficiency): another inverter only starts when the running ones carry the spread threshold of their limit, and below it the power is merged back onto fewer inverters. The others stay ready for peaks such as a kettle. One inverter discharges and another one charges; a role only moves to another inverter when it leads by the role switch margin in SoC and the role was held for at least 5 minutes. The safe state stores 0 W once in the device flash, so an inverter that reboots starts at 0 W; it is written at most once per hour.",
         "data": {
           "role_margin": "Role switch margin (SoC %)",
-          "fill_level": "Load per device before another one starts (%)",
+          "fill_level": "Spread threshold (%)",
           "flash_safe_state": "Store the safe state (0 W) in device flash"
+        },
+        "data_description": {
+          "fill_level": "Load per inverter before power is spread over one more inverter; below it, it is merged onto fewer. 85% with 3 × 2400 W: 1 inverter up to about 1900–2000 W. While clouds change quickly, 70% is used."
         }
       },
       "device_ips": {
         "title": "Device addresses",
-        "description": "Fixed IP address or hostname per zenSDK device. It overrides the address from the cloud and from mDNS, which is useful across VLANs. Leave empty to detect it automatically.\n\n{devices}"
+        "description": "Fixed IP address or hostname per zenSDK device. It overrides the address from the cloud and from mDNS, which is useful across VLANs. Leave empty to detect it automatically. A GUESSED name means the cloud gave no IP: enter the IP address.\n\n{devices}"
       },
       "diagnostics": {
-        "title": "Logging & simulation",
-        "description": "Debug options.",
+        "title": "Logging, simulation and test data",
+        "description": "Debug options. The P1 recording writes every P1 value (every second with a directly read HomeWizard P1 meter) with the battery power to <config>/zendure_ha/p1_<date>.csv, as test data for the simulation. It switches itself off at midnight.",
         "data": {
           "mqttlog": "Log MQTT communication",
-          "simulation": "Simulation mode"
+          "simulation": "Simulation mode",
+          "p1_record": "Record P1 every second until midnight (test data)"
+        }
+      },
+      "p1_token": {
+        "title": "HomeWizard P1 meter: token",
+        "description": "To read the P1 meter at {host} via API v2, a token is needed. Press the button on the P1 meter and click Submit within 30 seconds.\n\nOr tick API v1: then the meter is read every second via the Local API (switch \"Local API\" on in the HomeWizard app).",
+        "data": {
+          "use_v1": "Use API v1 (Local API) instead of a token"
         }
       }
     },
@@ -676,7 +716,10 @@
       "unknown": "Unexpected error",
       "mqtt_server_required": "Enter the address of the MQTT server.",
       "fast_longer_than_normal": "The fast interval cannot be longer than the normal interval.",
-      "invalid_address": "Enter a valid IP address or hostname."
+      "invalid_address": "Enter a valid IP address or hostname.",
+      "homewizard_press_button": "The P1 meter did not give a token yet: press its button and click Submit within 30 seconds.",
+      "homewizard_unreachable": "The HomeWizard P1 meter does not answer at this address.",
+      "homewizard_v1_unreachable": "The P1 meter does not answer via API v1: switch \"Local API\" on in the HomeWizard app."
     }
   },
   "issues": {
@@ -691,6 +734,10 @@
     "mqtt_local_disconnected": {
       "title": "Local MQTT broker is not connected",
       "description": "Home Assistant is not connected to the local MQTT server {server}. Check that the broker is running and that the user and password are correct. The issue disappears when the connection is restored."
+    },
+    "zensdk_no_address": {
+      "title": "No address known for {name}",
+      "description": "The Zendure cloud did not return an IP address for {name}, so the integration tried the constructed name {address}, which does not answer. Enter the IP address of the device (Zendure app, device information, or the DHCP list of your router) in Configure, Device addresses. A fixed DHCP lease is recommended. Until then the device can only be used with the connection set to cloud."
     }
   }
 }

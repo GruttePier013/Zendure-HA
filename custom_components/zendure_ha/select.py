@@ -103,19 +103,29 @@ class ZendureSelect(EntityZendure, SelectEntity):
 class ZendureRestoreSelect(ZendureSelect, RestoreEntity):
     """Representation of a Zendure select entity with restore."""
 
-    def __init__(self, device: EntityDevice, uniqueid: str, options: dict[int, str], onchanged: Callable | None, current: int | None = None) -> None:
-        """Initialize a select entity."""
+    def __init__(
+        self,
+        device: EntityDevice,
+        uniqueid: str,
+        options: dict[int, str],
+        onchanged: Callable | None,
+        current: int | None = None,
+        renamed: dict[str, str] | None = None,
+    ) -> None:
+        """Initialize a select entity. `renamed` maps old option names to new ones, so a restored old state is kept."""
         super().__init__(device, uniqueid, options, onchanged, current)
+        self._renamed = renamed or {}
 
     async def async_added_to_hass(self) -> None:
         """Handle entity which will be added."""
         await super().async_added_to_hass()
 
         state = await self.async_get_last_state()
-        if state is not None and state.state in self._attr_options:
-            self._attr_current_option = state.state
-        elif state is not None and state.state not in (None, "unknown", "unavailable"):
-            self._pending_option = state.state  # applied by setDict once the option exists
+        restored = None if state is None else self._renamed.get(state.state, state.state)
+        if restored is not None and restored in self._attr_options:
+            self._attr_current_option = restored
+        elif restored is not None and restored not in ("unknown", "unavailable"):
+            self._pending_option = restored  # applied by setDict once the option exists
             if self._attr_current_option not in self._attr_options:
                 self._attr_current_option = self._attr_options[0]
         elif self._attr_current_option not in self._attr_options:

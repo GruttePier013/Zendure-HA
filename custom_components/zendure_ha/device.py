@@ -130,6 +130,8 @@ class ZendureDevice(EntityDevice):
         self.mqtt: mqtt_client.Client | None = None
         self.zendure: mqtt_client.Client | None = None
         self.ipAddress = definition.get("ip", "") if definition.get("ip", "") != "" else self.default_hostname(definition["productModel"], self.snNumber)
+        # where the address comes from: cloud, manual, discovery, or guess (a constructed .local name that may not exist)
+        self.address_source = "cloud" if definition.get("ip", "") != "" else "guess"
 
         self.topic_read = f"iot/{self.prodkey}/{self.deviceId}/properties/read"
         self.topic_write = f"iot/{self.prodkey}/{self.deviceId}/properties/write"
@@ -205,6 +207,7 @@ class ZendureDevice(EntityDevice):
             9: "group5000",
         }
         self.fuseGroup = ZendureRestoreSelect(self, "fuseGroup", fuseGroups, None)
+        self.fuseGroup._attr_entity_category = EntityCategory.CONFIG
         self.acMode = ZendureSelect(self, "acMode", {1: "input", 2: "output"}, self.entityWrite, 1)
         self.electricLevel = ZendureSensor(self, "electricLevel", None, "%", "battery", "measurement")
         # set homeInput to 0 for devices, which have no AC charge capability
@@ -239,8 +242,14 @@ class ZendureDevice(EntityDevice):
         self.lastMessage = ZendureSensor(self, "lastMessage", None, None, "timestamp", None, category=diag)
         self.commandPower = ZendureSensor(self, "commandPower", None, "W", "power", "measurement", 0, state=0, category=diag)
         self.commandCount = ZendureSensor(self, "commandCount", None, None, None, "total_increasing", 0, state=0, category=diag)
+        self.command_total = 0
         self.slewActive = ZendureBinarySensor(self, "slewActive", None, None, category=diag)
         self.flashWrites = ZendureSensor(self, "flashWrites", None, None, None, "total_increasing", 0, state=0, category=diag)
+        # what the device does now and which role it has (set by the manager every control cycle)
+        self.activity = ZendureSensor(self, "activity", None, None, "enum", None, category=diag)
+        self.activity._attr_options = ["charging", "discharging", "standby", "reserve", "not_responding"]
+        self.role = ZendureSensor(self, "role", None, None, "enum", None, category=diag)
+        self.role._attr_options = ["charge", "discharge", "none"]
         # high frequency diagnostics are disabled by default: every state change is a row in the recorder database
         quiet(self.lastMessage, self.commandPower, self.commandCount)
 
@@ -510,6 +519,7 @@ class ZendureDevice(EntityDevice):
             self.lastMessage.update_value(dt_util.now())
 
     async def mqttProperties(self, payload: Any) -> None:
+        self.mqtt_last = monotonic()
         self.touchLastMessage()
         if self.lastseen == datetime.min:
             self.lastseen = datetime.now() + timedelta(minutes=5)
@@ -829,6 +839,7 @@ class ZendureDevice(EntityDevice):
         else:
             measured = self.homeOutput.asInt - self.homeInput.asInt
             self.slew.sync(measured)
+            self.slew.measure(measured)
             await self._follow_battery_limit(measured)
         self.slewActive.update_value(1 if self.slew.pending else 0)
 
@@ -871,7 +882,9 @@ class ZendureDevice(EntityDevice):
         if abs(power + self.homeInput.asInt - self.homeOutput.asInt) <= SmartMode.POWER_TOLERANCE:
             _LOGGER.debug("Power charge %s => no action [power %s]", self.name, power)
             return -self.homeInput.asInt
-        self.commandCount.update_value(self.commandCount.asInt + 1)
+        self.command_total += 1
+        self.command_time = monotonic()
+        self.commandCount.update_value(self.command_total)
         self._off_sent = False
         return await self.charge(power)
 
@@ -893,7 +906,9 @@ class ZendureDevice(EntityDevice):
         if abs(power - self.homeOutput.asInt + self.homeInput.asInt) <= SmartMode.POWER_TOLERANCE:
             _LOGGER.debug("Power discharge %s => no action [power %s]", self.name, power)
             return self.homeOutput.asInt
-        self.commandCount.update_value(self.commandCount.asInt + 1)
+        self.command_total += 1
+        self.command_time = monotonic()
+        self.commandCount.update_value(self.command_total)
         self._off_sent = False
         return await self.discharge(power)
 
@@ -925,6 +940,10 @@ class ZendureDevice(EntityDevice):
         self._off_sent = True
         await self.power_off()
 
+    async def prepare(self, _direction: int) -> bool:
+        """Prepare the AC mode for a role (zenSDK devices only)."""
+        return False
+
     async def power_off(self) -> None:
         """Set the power off."""
 
@@ -946,6 +965,7 @@ class ZendureLegacy(ZendureDevice):
         """Initialize Device."""
         super().__init__(hass, deviceId, name, model, definition, parent)
         self.connection = ZendureRestoreSelect(self, "connection", {0: "cloud", 1: "local"}, self.mqttSelect, 0)
+        self.connection._attr_entity_category = EntityCategory.CONFIG
         self.mqttReset = ZendureButton(self, "mqttReset", self.button_press)
         self.bleAdapter = ZendureRestoreSelect(self, "bleAdapter", self.ble_adapter_options(), self.bleAdapterSelect, 0)
 
@@ -1014,16 +1034,23 @@ class ZendureZenSdk(ZendureDevice):
         self._poll_last = -Http.POLL_IDLE
         super().__init__(hass, deviceId, name, model, definition, parent)
         self.connection = ZendureRestoreSelect(self, "connection", {0: "cloud", 2: "zenSDK"}, self.mqttSelect, 0)
+        self.connection._attr_entity_category = EntityCategory.CONFIG
         self.httpid = 0
         self.httpErrors = ZendureSensor(self, "httpErrors", None, None, None, "total_increasing", 0, state=0, category=EntityCategory.DIAGNOSTIC)
         self.ipAddressSensor = ZendureSensor(self, "ipAddress", state=self.ipAddress, category=EntityCategory.DIAGNOSTIC)
 
-    def set_address(self, address: str) -> None:
+    def set_address(self, address: str, source: str = "manual") -> None:
         """Change the address of the device (manual override or discovery)."""
         if address and address != self.ipAddress:
-            _LOGGER.info("Address of %s changed from %s to %s", self.name, self.ipAddress, address)
+            _LOGGER.info("Address of %s changed from %s to %s (%s)", self.name, self.ipAddress, address, source)
             self.ipAddress = address
             self.ipAddressSensor.update_value(address)
+            # a new address gets a fresh start: no back-off from failures at the old one
+            self._http_failures = 0
+            self._http_retry_after = 0.0
+            self._update_issue(False)
+        if address:
+            self.address_source = source
 
     async def mqttSelect(self, select: Any, _value: Any) -> None:
         from .api import Api
@@ -1031,9 +1058,12 @@ class ZendureZenSdk(ZendureDevice):
         self.mqtt = None
         match select.value:
             case 0:
-                # cloud: listen to the cloud topics of this device again
+                # cloud: listen to the cloud topics of this device again; HTTP problems no longer matter
                 Api.mqttCloud.subscribe(f"/{self.prodkey}/{self.deviceId}/#")
                 Api.mqttCloud.subscribe(f"iot/{self.prodkey}/{self.deviceId}/#")
+                self._http_failures = 0
+                self._http_retry_after = 0.0
+                self._update_issue(False)
 
             case 2:
                 # zenSDK: the device is reached over HTTP, stop listening to the cloud topics
@@ -1101,6 +1131,46 @@ class ZendureZenSdk(ZendureDevice):
         """Set the power off. The first time the safe 0 W state is also stored in the flash of the device."""
         await self._power_command(2, 0, 0, persist=True)
 
+    async def prepare(self, direction: int) -> bool:
+        """Set the AC mode of an idle device to the direction of its role (1 = input/charge, 2 = output/discharge).
+
+        The device that is kept ready to charge then already is in input mode when the export starts, and the
+        one kept ready to discharge in output mode. Limits stay 0 W, RAM only (smartMode 1). Only sent when the
+        mode differs, and not within the direction change pause after the device ran.
+        """
+        mode = 1 if direction < 0 else 2
+        if not self.online or self.pwr_offgrid != 0 or self.homeInput.asInt or self.homeOutput.asInt:
+            return False
+        if abs(self.slew.current) >= ZERO_BAND or self.slew.pending or not self.slew.flip_released():
+            return False
+        current = getattr(self, "ac_mode_sent", None) or self.acMode.value
+        if current == mode:
+            return False
+        _LOGGER.debug("Prepare %s: acMode %s for its role", self.name, "input" if mode == 1 else "output")
+        await self._power_command(mode, 0, 0)
+        return True
+
+    async def _switch_ac_mode(self, ac_mode: int, output: int, input_: int) -> None:
+        """Change the AC mode in clean steps: old limit to 0 W, then the new mode at 0 W, then (by the caller) the new limit.
+
+        Sending the mode and a new limit in one command (as 1.4.4 did) makes the device switch its relay and
+        start the new direction at once. Here the limit goes to 0 W first, the mode is switched while nothing
+        flows, and the new limit follows MODE_SWITCH_DELAY later. Nothing extra is sent when the mode does
+        not change, or when the new limits are 0 W anyway.
+        """
+        current = getattr(self, "ac_mode_sent", None) or self.acMode.value
+        if current in (None, ac_mode) or (output == 0 and input_ == 0):
+            return
+        old_output, old_input = getattr(self, "limits_sent", (self.limitOutput.asInt, self.limitInput.asInt))
+        if old_output or old_input:
+            _LOGGER.debug("Mode switch %s: limit to 0 W first", self.name)
+            await self.doCommand({"properties": {"smartMode": 1, "acMode": current, "outputLimit": 0, "inputLimit": 0}})
+        _LOGGER.debug("Mode switch %s: acMode %s at 0 W", self.name, "input" if ac_mode == 1 else "output")
+        await self.doCommand({"properties": {"smartMode": 1, "acMode": ac_mode, "outputLimit": 0, "inputLimit": 0}})
+        self.ac_mode_sent = ac_mode
+        self.limits_sent = (0, 0)
+        await asyncio.sleep(Http.MODE_SWITCH_DELAY)
+
     async def _power_command(self, ac_mode: int, output: int, input_: int, persist: bool = False) -> None:
         """Send a power command.
 
@@ -1110,7 +1180,10 @@ class ZendureZenSdk(ZendureDevice):
         After a reboot the device then starts at 0 W instead of at the last (high) setpoint.
         """
         persist = persist and self.persist_safe_state and self.pwr_offgrid == 0 and self._flash_safe is not True
+        await self._switch_ac_mode(ac_mode, output, input_)
         properties = {"smartMode": 0 if persist else 1, "acMode": ac_mode, "outputLimit": output, "inputLimit": input_}
+        self.ac_mode_sent = ac_mode
+        self.limits_sent = (output, input_)
         if await self.doCommand({"properties": properties}) and persist:
             self._flash_safe = True
             self._flash_last = monotonic()
@@ -1167,9 +1240,11 @@ class ZendureZenSdk(ZendureDevice):
         self._http_failures += 1
         self._http_retry_after = monotonic() + min(Http.BACKOFF_MAX, Http.BACKOFF_BASE * 2 ** (self._http_failures - 1))
         self._logHttpError(kind, err)
-        if self._http_failures >= Http.OFFLINE_AFTER:
+        # offline only when the device is silent over MQTT too (its reports still arrive when only HTTP fails)
+        if self._http_failures >= Http.OFFLINE_AFTER and monotonic() - getattr(self, "mqtt_last", -1e9) > 300:
             self.lastseen = datetime.min
-        if self._http_failures >= Http.ISSUE_AFTER:
+        # a guessed .local name that does not resolve will not start working by itself: tell the user sooner
+        if self._http_failures >= (Http.OFFLINE_AFTER if self.address_source == "guess" else Http.ISSUE_AFTER):
             self._update_issue(True)
 
     def _http_succeeded(self, kind: str) -> None:
@@ -1183,6 +1258,9 @@ class ZendureZenSdk(ZendureDevice):
     def _update_issue(self, failing: bool) -> None:
         """Raise a repair issue while the device does not answer, remove it when it does."""
         issue_id = f"zensdk_unreachable_{self.snNumber.lower()}"
+        # only relevant while the device is controlled over zenSDK (the start-up read also runs in cloud mode)
+        if failing and self.connection.value != SmartMode.ZENSDK:
+            failing = False
         if failing and not self._http_issue:
             self._http_issue = True
             ir.async_create_issue(
@@ -1191,12 +1269,14 @@ class ZendureZenSdk(ZendureDevice):
                 issue_id,
                 is_fixable=False,
                 severity=ir.IssueSeverity.WARNING,
-                translation_key="zensdk_unreachable",
+                translation_key="zensdk_no_address" if self.address_source == "guess" else "zensdk_unreachable",
                 translation_placeholders={"name": self.name, "address": self.ipAddress},
             )
         elif not failing and self._http_issue:
             self._http_issue = False
             ir.async_delete_issue(self.hass, DOMAIN, issue_id)
+        elif not failing and self.connection.value != SmartMode.ZENSDK:
+            ir.async_delete_issue(self.hass, DOMAIN, issue_id)  # e.g. left over from before a switch to cloud
 
     async def httpGet(self, url: str, key: str | None = None) -> dict[str, Any]:
         ok, payload = await self._http("GET", url)

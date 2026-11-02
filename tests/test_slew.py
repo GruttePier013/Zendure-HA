@@ -42,9 +42,9 @@ def test_ramp_up_is_limited_per_second() -> None:
     lim = _limiter(clock)
     lim.limit(0)
     clock.now += 2
-    assert lim.limit(2400) == 600  # at most one second of ramp (600 W/s) per command
+    assert lim.limit(2400) == 600  # a start from 0 W: at most one second of ramp (600 W/s) per command
     assert lim.pending is True
-    for expected in (1200, 1800, 2400):
+    for expected in (1800, 2400):  # running in the same direction: the faster rate (1200 W/s)
         clock.now += 1
         assert lim.limit(2400) == expected
     assert lim.pending is False
@@ -192,7 +192,8 @@ def test_ready_boost_stops_when_the_target_goes_down() -> None:
     lim.limit(800)  # kettle off
     assert not lim.boost
     clock.now += 1
-    assert lim.limit(2200) == 1400  # a new rise uses the normal rate again
+    assert not lim.boost
+    assert lim.limit(2200) == 2000  # running in the same direction: faster rate (1200 W/s), not the ready boost
 
 
 def test_ready_device_already_running_in_the_same_direction_ramps_faster() -> None:
@@ -206,13 +207,16 @@ def test_ready_device_already_running_in_the_same_direction_ramps_faster() -> No
     assert lim.limit(2450, ready=True) == 2450
 
 
-def test_other_running_devices_keep_the_normal_rate() -> None:
+def test_a_start_from_zero_keeps_the_normal_rate() -> None:
+    """Only a start from 0 W (relay switching) uses the normal rate; running devices ramp faster (option D)."""
     clock = _Clock()
     lim = _limiter(clock)
     lim.ready_up = 1200
-    lim.limit(250)
+    lim.limit(0)
+    clock.now += 60
+    assert lim.limit(2450) == 600  # not the ready device: 600 W/s from 0 W
     clock.now += 1
-    assert lim.limit(2450) == 850
+    assert lim.limit(2450) == 1800  # now running: 1200 W/s
 
 
 def test_ready_flag_never_speeds_up_a_direction_change() -> None:
@@ -242,5 +246,54 @@ def test_follow_keeps_the_pause_right_after_stopping() -> None:
     lim = _limiter(clock)
     lim.current, lim._updated, lim._last_dir = -1200, clock.now, -1  # noqa: SLF001
     lim.follow(0)
+    clock.now += 1
+    assert lim.limit(2000) == 0  # 1 s after it stopped charging: below the 2 s minimum
+
+
+def _stopped(clock: _Clock) -> SlewLimiter:
+    """A limiter that was charging 1200 W and has just been commanded to 0 W."""
+    lim = _limiter(clock, flip=6)
+    lim.current, lim._updated, lim._last_dir = -1200, clock.now, -1  # noqa: SLF001
+    clock.now += 1
+    assert lim.limit(0) == 0
+    return lim
+
+
+def test_confirmed_zero_releases_the_direction_change_after_two_seconds() -> None:
+    clock = _Clock()
+    lim = _stopped(clock)
+    clock.now += 1.5
+    lim.measure(0)  # fresh measurement (1.5 s after the stop): 0 W
+    assert lim.limit(800) == 0  # still below the 2 s minimum
+    clock.now += 0.5
+    assert lim.limit(800) > 0  # 2 s and confirmed: released
+
+
+def test_measurement_right_after_the_stop_does_not_count() -> None:
+    clock = _Clock()
+    lim = _stopped(clock)
+    clock.now += 0.5
+    lim.measure(0)  # may still be the report from before the stop
     clock.now += 2
-    assert lim.limit(2000) == 0  # 2 s after it stopped charging: still the 5 s pause
+    assert lim.limit(800) == 0  # not confirmed, flip_delay (6 s) not over
+
+
+def test_without_measurements_the_fixed_pause_applies() -> None:
+    clock = _Clock()
+    lim = _stopped(clock)
+    clock.now += 5.9
+    assert lim.limit(800) == 0
+    clock.now += 0.2
+    assert lim.limit(800) > 0
+
+
+def test_device_that_still_reports_power_is_waited_for() -> None:
+    clock = _Clock()
+    lim = _stopped(clock)
+    clock.now += 2
+    lim.measure(-700)  # it is still charging: did not follow the stop yet
+    clock.now += 5
+    assert lim.limit(800) == 0  # 7 s, but no 0 W seen: keep waiting
+    lim.measure(0)
+    clock.now += 1
+    assert lim.limit(800) > 0  # confirmed now

@@ -86,10 +86,11 @@ def test_roles_hold_time_blocks_a_quick_swap() -> None:
     assert roles.discharger == other
 
 
-def test_roles_with_a_single_device_use_it_for_both() -> None:
+def test_roles_with_a_single_device_have_no_charger() -> None:
+    """One device online: no role split, the charge role shows '-' instead of the same device."""
     roles = RoleSelector()
     roles.update(_soc(a=50), _soc(a=50))
-    assert roles.discharger == "a" and roles.charger == "a"
+    assert roles.discharger == "a" and roles.charger is None
 
 
 def test_roles_skip_devices_that_cannot_take_part() -> None:
@@ -105,3 +106,12 @@ def test_fusegroup_has_separate_charge_and_discharge_flags() -> None:
     assert group.initPower  # discharge still needs initialising
     group.initPower = True
     assert group.initCharge and group.initDischarge
+
+
+def test_discovery_matches_the_serial_in_the_txt_records() -> None:
+    from custom_components.zendure_ha.discovery import match_device
+
+    serials = {"HEC4NENCN521191": "L2"}
+    name = "Zendure-solarFlow2400ACPlus-A1B2C3D4E5F6._zendure._tcp.local."
+    assert match_device(name, serials) is None  # the suffix is not the serial
+    assert match_device(name, serials, {b"sn": b"HEC4NENCN521191"}) == "HEC4NENCN521191"

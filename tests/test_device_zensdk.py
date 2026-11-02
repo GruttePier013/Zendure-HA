@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+
 from custom_components.zendure_ha.const import SmartMode
 
 
@@ -10,6 +11,7 @@ def _last_props(device) -> dict:  # noqa: ANN001
 
 
 async def test_discharge_first_call_asserts_full_command(zensdk_device) -> None:  # noqa: ANN001
+    zensdk_device.acMode._attr_current_option = "output"  # already in output mode: one command
     await zensdk_device.discharge(500)
 
     assert len(zensdk_device.mqtt_commands) == 1
@@ -130,3 +132,109 @@ async def test_full_battery_clears_the_old_charge_limit(zensdk_device) -> None: 
     assert zensdk_device.slew.current == 0
     assert _last_props(zensdk_device)["inputLimit"] == 0
     assert _last_props(zensdk_device)["smartMode"] == 1  # RAM, no flash write
+
+
+async def test_prepare_sets_input_mode_for_the_charge_role(zensdk_device) -> None:  # noqa: ANN001
+    """An idle device with the charge role still in output mode is switched to input, at 0 W, RAM only."""
+    zensdk_device.connectionStatus._attr_native_value = 10  # online
+    zensdk_device.acMode._attr_current_option = "output"
+    assert await zensdk_device.prepare(-1) is True
+    assert _last_props(zensdk_device) == {"smartMode": 1, "acMode": 1, "outputLimit": 0, "inputLimit": 0}
+    sent = len(zensdk_device.mqtt_commands)
+    assert await zensdk_device.prepare(-1) is False  # already in input mode: nothing sent again
+    assert len(zensdk_device.mqtt_commands) == sent
+
+
+async def test_prepare_waits_for_the_direction_change_pause(zensdk_device) -> None:  # noqa: ANN001
+    zensdk_device.connectionStatus._attr_native_value = 10  # online
+    zensdk_device.acMode._attr_current_option = "output"
+    zensdk_device.slew.limit(500)
+    zensdk_device.slew.limit(0, hold=False)  # just stopped discharging
+    assert await zensdk_device.prepare(-1) is False
+
+
+async def test_prepare_does_nothing_while_running(zensdk_device) -> None:  # noqa: ANN001
+    zensdk_device.connectionStatus._attr_native_value = 10  # online
+    zensdk_device.homeOutput._attr_native_value = 300
+    assert await zensdk_device.prepare(-1) is False
+
+
+def test_guessed_address_is_marked_and_a_manual_one_replaces_it(zensdk_device) -> None:  # noqa: ANN001
+    assert zensdk_device.address_source == "guess"
+    zensdk_device._http_failures = 4  # noqa: SLF001
+    zensdk_device.set_address("192.168.1.51", "manual")
+    assert zensdk_device.ipAddress == "192.168.1.51"
+    assert zensdk_device.address_source == "manual"
+    assert zensdk_device._http_failures == 0  # noqa: SLF001  fresh start at the new address
+
+
+def _props(device) -> list[dict]:  # noqa: ANN001
+    return [{k: v for k, v in c["properties"].items()} for c in device.mqtt_commands]
+
+
+async def test_first_discharge_from_input_mode_switches_at_zero_first(zensdk_device) -> None:  # noqa: ANN001
+    zensdk_device.acMode._attr_current_option = "input"
+    await zensdk_device.discharge(500)
+    assert _props(zensdk_device) == [
+        {"smartMode": 1, "acMode": 2, "outputLimit": 0, "inputLimit": 0},
+        {"smartMode": 1, "acMode": 2, "outputLimit": 500, "inputLimit": 0},
+    ]
+
+
+async def test_mode_switch_goes_limit_zero_then_mode_then_new_limit(zensdk_device) -> None:  # noqa: ANN001
+    """Discharging 500 W, then charging 400 W: old limit to 0, switch mode at 0 W, then the new limit."""
+    await zensdk_device.discharge(500)
+    await zensdk_device.charge(-400)
+    assert _props(zensdk_device)[-3:] == [
+        {"smartMode": 1, "acMode": 2, "outputLimit": 0, "inputLimit": 0},
+        {"smartMode": 1, "acMode": 1, "outputLimit": 0, "inputLimit": 0},
+        {"smartMode": 1, "acMode": 1, "outputLimit": 0, "inputLimit": 400},
+    ]
+
+
+async def test_mode_switch_after_a_stop_skips_the_zero_step(zensdk_device) -> None:  # noqa: ANN001
+    await zensdk_device.discharge(500)
+    await zensdk_device.discharge(0)  # the slew limiter already brought it to 0 W
+    n = len(zensdk_device.mqtt_commands)
+    await zensdk_device.charge(-400)
+    assert _props(zensdk_device)[n:] == [
+        {"smartMode": 1, "acMode": 1, "outputLimit": 0, "inputLimit": 0},
+        {"smartMode": 1, "acMode": 1, "outputLimit": 0, "inputLimit": 400},
+    ]
+
+
+async def test_same_mode_is_one_command(zensdk_device) -> None:  # noqa: ANN001
+    await zensdk_device.charge(-400)
+    n = len(zensdk_device.mqtt_commands)
+    await zensdk_device.charge(-800)
+    assert _props(zensdk_device)[n:] == [{"smartMode": 1, "acMode": 1, "outputLimit": 0, "inputLimit": 800}]
+
+
+async def test_prepared_device_starts_with_one_command(zensdk_device) -> None:  # noqa: ANN001
+    """A device that was prepared for its role (mode already switched at 0 W) starts without another switch."""
+    zensdk_device.connectionStatus._attr_native_value = 10
+    zensdk_device.acMode._attr_current_option = "output"
+    await zensdk_device.prepare(-1)
+    n = len(zensdk_device.mqtt_commands)
+    await zensdk_device.charge(-600)
+    assert _props(zensdk_device)[n:] == [{"smartMode": 1, "acMode": 1, "outputLimit": 0, "inputLimit": 600}]
+
+
+def test_activity_and_role_sensors_are_diagnostic_enums(zensdk_device) -> None:  # noqa: ANN001
+    from homeassistant.const import EntityCategory
+
+    for sensor in (zensdk_device.activity, zensdk_device.role):
+        assert sensor.entity_category is EntityCategory.DIAGNOSTIC
+        assert sensor.device_class == "enum"
+    assert "standby" in zensdk_device.activity.options
+    assert zensdk_device.role.options == ["charge", "discharge", "none"]
+
+
+def test_device_settings_are_in_the_configuration_section(zensdk_device) -> None:  # noqa: ANN001
+    from homeassistant.const import EntityCategory
+
+    from custom_components.zendure_ha.entity import CONFIG_KEYS
+
+    assert zensdk_device.connection.entity_category is EntityCategory.CONFIG
+    assert zensdk_device.fuseGroup.entity_category is EntityCategory.CONFIG
+    assert {"gridReverse", "Fanspeed", "Fanmode", "lampSwitch"} <= CONFIG_KEYS

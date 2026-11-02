@@ -1,110 +1,149 @@
-<p align="center">
-  <img src="https://zendure.com/cdn/shop/files/logo.svg" alt="Logo">
-</p>
-
 # Zendure HA-GP013
-
-**Improved on: device lifetime · multi-inverter control · robustness**
-
-> Zendure HA-GP013 is a fork of the Zendure Home Assistant integration 1.4.4 that controls your Zendure batteries more gently and more cleverly.
-> Power commands stay in RAM instead of the device flash, every inverter ramps smoothly with a pause at 0 W on a change of direction, and only as many inverters run as the load needs while one stays ready for peaks such as a kettle.
-> It also adds a complete settings menu, diagnostics and repair messages, a fixed IP address per device and more robust local (zenSDK) communication.
-
-*Unofficial community fork of [Zendure-HA](https://github.com/Zendure/Zendure-HA) 1.4.4, not affiliated with or endorsed by Zendure. It is a drop-in replacement: same domain `zendure_ha`, your devices, entities and settings are kept. It cannot be installed next to the original integration. All changes: [CHANGES.md](CHANGES.md).*
-
-This Home Assistant integration connects your Zendure devices to Home Assistant, making all reported parameters available as entities. You can track battery levels, power input/output, manage charging settings, and integrate your Zendure devices into your home automation routines. The integration also provides a power manager feature that can help balance energy usage across multiple devices when a P1 meter entity is supplied.
-
 
 [![hacs][hacsbadge]][hacs] [![releasebadge]][release] [![License][license-shield]](LICENSE)
 
-## What is different from 1.4.4
+**A Home Assistant integration for Zendure home batteries that follows your P1 meter closely, uses as few inverters as needed and is easy on your hardware.**
 
-- **Lifetime**: dynamic power commands in RAM (smartMode 1), a safe 0 W state stored in flash at most once per hour, fewer and deduplicated writes, calmer polling when idle, in manual mode and when off.
-- **Gentle on relays and the fuse box**: at most 600 W per second up and 1200 W down per inverter, always through 0 W with a 5 s pause on a change of direction, a minimum run time, fuse group limits respected when a device starts.
-- **Smarter with several inverters**: charging and discharging use as few inverters as needed (3000 W on 2, 1500 W on 1), the one with the highest SoC stays ready and starts faster for peaks, roles only swap after a clear SoC difference; hand-overs run in parallel.
-- **Robust**: serialized zenSDK requests with back-off, offline detection, Repairs issues, `Download diagnostics`, fixed IP per device, optional zeroconf discovery, Home Assistant 2026.8 ready.
-- **Settings**: everything in one options menu (P1, power control, slew rate, lifetime, device addresses, logging), complete translations in English, Dutch, German, French and Polish.
+Zendure HA-GP013 connects Zendure SolarFlow, Hyper, Hub, AIO and Ace devices to Home Assistant and steers them toward zero at the grid connection (*nul op de meter*). It is an independent integration that started from [Zendure-HA](https://github.com/Zendure/Zendure-HA) 1.4.4 and has since gone its own way, with its own control logic, settings and release cycle.
 
-A simulation against the 1.4.4 smart mode (same house, same inverters) is in [CHANGES.md](CHANGES.md#simulation-against-144-smart-mode) and can be repeated with `scripts/compare_smart_mode.py`.
-
-## Overview
-
-The guides below are from the original project and apply to this fork as well.
-
-- **[Installation and ZendureApp Token](https://github.com/Zendure/Zendure-HA/wiki/Installation)**
-  - [Troubleshooting Hyper2000](https://github.com/Zendure/Zendure-HA/wiki/Troubleshooting)
-  - Tutorials
-    - [Domotica & IoT](https://iotdomotica.nl/tutorial/install-zendure-home-assistant-integration-tutorial) 🇬🇧
-    - [twoenter blog](https://www.twoenter.nl/blog/en/smarthome-en/zendure-home-battery-home-assistant-integration/) 🇬🇧 or [twoenter blog](https://www.twoenter.nl/blog/home-assistant-nl/zendure-thuisaccu-integratie-met-home-assistant/) 🇳🇱
-    - [@Kieft-C](https://github.com/Kieft-C/Zendure-BKW-PV/wiki/Installation-Zendure-Home-Assistant-integration-%E2%80%93-Tutorial) 🇩🇪
-  - Troubleshooting with few general hints
-    - [Kieft-C](https://github.com/Kieft-C/Zendure-BKW-PV/wiki/Zendure-HA-integration-%E2%80%93-Troubleshoot-&-Mini-Anleitung) 🇩🇪
-  - Solution for Protocol Mosquitto local MQTT Error after Update Zendure Device
-    - [Kieft-C](https://github.com/Kieft-C/Zendure-BKW-PV/wiki/%E2%80%9EProtocol-error%22-im-Mosquitto%E2%80%90Log-nach-Zendure%E2%80%90Firmware%E2%80%90Update-(KW26-27-in-2026))🇩🇪
-- **Configuration:**
-  - [Fuse Group](https://github.com/Zendure/Zendure-HA/wiki/Fuse-Group)
-  - Zendure Manager
-    - [Power distribution strategy](https://github.com/Zendure/Zendure-HA/wiki/Power-distribution-strategy)
-  - [Local Mqtt (Legacy devices)](https://github.com/Zendure/Zendure-HA/wiki/Local-Mqtt-(Legacy-Devices))
-  - Home Assistant Energy Dashboard
-
-- **Supported devices:**
-  - Ace1500
-  - Aio2400
-  - Hyper2000
-  - Hub1200 [German](https://github.com/Zendure/Zendure-HA/wiki/SolarFlow-Hub1200-German)
-  - Hub2000
-  - [SF800](https://github.com/Zendure/Zendure-HA/wiki/SolarFlow-800)
-  - SF800 Pro
-  - SF800 Plus
-  - SF1600 AC+
-  - SF2400 AC
-  - SF2400 AC+
-  - SF2400 Pro
-  - SuperBase V6400 (?)
-  - SuperBase V4600 not yet supported using the token
-
-- **Device Automation:**
-  - Cheap hours.
-
-## Minimum Requirements
-- [Home Assistant](https://github.com/home-assistant/core) 2025.5+
-
-## Installation
-
-### HACS (Home Assistant Community Store)
-
-This fork is not in the HACS default list; add it as a custom repository:
-
-1. Remove the original Zendure integration from HACS first (keep the configuration in Home Assistant: the fork uses the same domain and takes over your devices and settings).
-2. In HACS open the menu (three dots) -> "Custom repositories", add `https://github.com/OWNER/Zendure-HA-GP013` with type "Integration".
-3. Search for "Zendure HA-GP013" and select "Download".
-4. Restart Home Assistant.
-5. Go to "Settings" in the Home Assistant sidebar, then select "Devices and Services".
-6. Click the blue [+ Add Integration] button at the bottom right, search for "Zendure", and install it.
-
-   [![Set up a new integration in Home Assistant](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=zendure_ha)
-
-
-## Contributing
-
-Contributions are welcome! If you're interested in contributing, please review our [Contribution Guidelines](CONTRIBUTING.md) before submitting a pull request or issue.
-
-## Credits
-
-Based on [Zendure-HA](https://github.com/Zendure/Zendure-HA) by the original authors and contributors. If you want to support the original author: [![Buy Me a Coffee][buymecoffeebadge]][buymecoffee]
+> **Not an official Zendure product.** This integration is not affiliated with or endorsed by Zendure. For the original integration, see [Zendure-HA](https://github.com/Zendure/Zendure-HA).
 
 ---
 
-[buymecoffee]: https://www.buymeacoffee.com/fireson
-[buymecoffeebadge]: https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png
-[license-shield]: https://img.shields.io/github/license/OWNER/Zendure-HA-GP013.svg?style=for-the-badge
-[hacs]: https://github.com/OWNER/Zendure-HA-GP013
-[hacsbadge]: https://img.shields.io/badge/HACS-Custom-orange.svg?style=for-the-badge
-[release]: https://github.com/OWNER/Zendure-HA-GP013/releases
-[releasebadge]: https://img.shields.io/github/v/release/OWNER/Zendure-HA-GP013?style=for-the-badge
+## Origin and thanks
 
+This project would not exist without **[Zendure-HA](https://github.com/Zendure/Zendure-HA)** by [fireson](https://github.com/fireson) and its contributors. Their work on device support, the Zendure cloud and MQTT protocols, zenSDK and the first smart-matching manager is the foundation that everything here is built on. Thank you!
+
+Version 1.4.4 of Zendure-HA was the starting point. Since then, the control part has been largely rewritten: the slew limiter, roles, multi-inverter spreading, cloud handling, direct P1 reading, discovery, options menu and diagnostics are new. This fork now differs so much that its changes cannot easily go back upstream, so it continues as a separate project:
+
+- It keeps the domain `zendure_ha`, so it **replaces** Zendure-HA. Your devices, entities and settings carry over, but the two cannot be installed side by side.
+- Problems with this integration belong in [this repository's issues][issues], not with the Zendure-HA project.
+- Device support, protocol fixes and new models from Zendure-HA are adopted where they fit.
+
+If you want to support the original author: [![Buy Me a Coffee][buymecoffeebadge]][buymecoffee]
+
+---
+
+## Features
+
+### Following the P1 meter
+- **Smart matching** steers the batteries so the grid connection stays around 0 W. Between two control cycles, the power of devices that are already running is adjusted on every P1 update without switching relays.
+- **P1 every second.** A HomeWizard P1 meter can be read directly over API v2 (WebSocket, the meter pushes every telegram) or API v1. The HomeWizard integration updates only about every 5 seconds. With changing clouds the simulation shows 67 Wh instead of 142 Wh grid import. The Home Assistant sensor stays as the fallback.
+- **Changing clouds.** Fast-changing clouds are detected from the P1 meter (without the effect of the batteries), with a threshold that follows the sun, so also with less than 1000 W of PV. While they last, charging aims for a small export instead of import, charging resumes after 10 s instead of 60 s, a short small shortage does not start an inverter, and one inverter stays ready to discharge.
+
+### Multiple inverters
+- **Spread threshold.** Charging and discharging use as few inverters as needed for better efficiency: for example 3000 W on 2 inverters and 1500 W on 1. Above the threshold the power is spread over one more inverter. Below it, the power is merged back onto fewer inverters.
+- **Roles.** One inverter is ready to charge and one is ready to discharge. The one with the highest SoC covers peaks such as a kettle right away. Roles only swap after a clear SoC difference and a hold time, and hand-overs run in parallel.
+
+### Easy on the hardware
+- **Device flash:** power commands go to RAM (smartMode 1). A safe 0 W state is stored in flash at most once per hour.
+- **Relays and the fuse box:**
+  - Power changes by at most 600 W/s up and 1200 W/s down per inverter.
+  - A change of direction always passes through a confirmed 0 W and a mode-switch pause.
+  - Inverters have a minimum run time.
+  - Fuse group limits are respected when a device starts.
+- **Device Wi-Fi/ESP32:** zenSDK requests are serialized, with back-off, deduplicated writes and calm polling while idle, in manual mode and when off.
+
+### Robust and transparent
+- **Following devices to new addresses:**
+  - A fixed IP address can be set per device.
+  - mDNS discovery identifies a device by its own report.
+  - A manual address that no longer answers is updated automatically.
+  - When mDNS does not work at all, the integration searches the local network.
+- **Problem reporting:** offline detection, Repairs issues, *Download diagnostics* and diagnostic sensors per inverter (activity, role, flash writes, address source).
+- **Settings:** one options menu covers the P1 meter, power control, slew rate, multiple inverters, device addresses and logging. Translations are available in English, Dutch, German, French and Polish.
+
+Every change to the control logic is measured in a simulation against Zendure-HA 1.4.4 (same house, same inverters). See [CHANGES.md](CHANGES.md#simulation-against-144-smart-mode). You can repeat the simulation with `scripts/compare_smart_mode.py`.
+
+## Supported devices
+
+Ace 1500, AIO 2400, Hyper 2000, Hub 1200, Hub 2000, SolarFlow 800 / 800 Pro / 800 Plus, SolarFlow 1600 AC+, SolarFlow 2400 AC / AC+ / Pro, SuperBase V6400 (untested). SuperBase V4600 is not supported via the token yet.
+
+The smart-matching features are developed on three SolarFlow 2400 AC+ devices on zenSDK with a local MQTT broker.
+
+## Requirements
+
+- Home Assistant 2025.5 or newer
+- A Zendure app token (see the [installation guide](https://github.com/Zendure/Zendure-HA/wiki/Installation) of Zendure-HA; the steps are the same)
+- For smart matching: a P1 sensor in W. A HomeWizard P1 meter can also be read directly.
+
+## Installation
+
+### HACS (custom repository)
+
+1. If Zendure-HA is installed through HACS, remove it in HACS first. Keep the integration in *Settings → Devices & services*, because this integration takes over its devices and settings.
+2. In HACS, open the menu (three dots) → *Custom repositories*. Add `https://github.com/GruttePier013/Zendure-HA-GP013` with the type *Integration*.
+3. Search for **Zendure HA-GP013** and select *Download*.
+4. Restart Home Assistant.
+5. If this is a new installation, add the integration:
+
+   [![Add integration](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=zendure_ha)
+
+### Manual
+
+Copy `custom_components/zendure_ha` from the [latest release][release] (`zendure_ha.zip`) into the `custom_components` folder of your Home Assistant configuration, then restart Home Assistant.
+
+## Configuration
+
+All settings are under *Settings → Devices & services → Zendure HA-GP013 → Configure*:
+
+| Menu | What it sets |
+|---|---|
+| Account / token | Zendure app token |
+| MQTT & Wi-Fi | Cloud or local MQTT broker |
+| P1 meter | P1 sensor and, optionally, the HomeWizard P1 meter that is read every second |
+| Power control | Control cycle, start power, tolerance, manual interval, peak limit, export margin during changing clouds |
+| Slew rate | Ramp up / down, faster ramp for running inverters, direction change delay, minimum run time |
+| Multiple inverters | Spread threshold, role switch margin, safe state in flash |
+| Device addresses | Fixed IP address per zenSDK device |
+| Logging, simulation and test data | MQTT logging, simulation log, P1 recording every second until midnight |
+
+### Reading a HomeWizard P1 meter directly
+
+1. Enter the IP address of the P1 meter in *Configure → P1 meter*. The address from the HomeWizard integration is suggested.
+2. If the HomeWizard integration already uses API v2, its token is reused. Otherwise, press the button on the P1 meter and select *Submit* within 30 seconds.
+3. Alternatively, tick *API v1*. You then need to turn on *Local API* in the HomeWizard app.
+
+### Recording P1 as test data
+
+*Configure → Logging, simulation and test data → Record P1 every second until midnight* writes every P1 value with the battery power to `<config>/zendure_ha/p1_<YYYY-MM-DD>.csv`. When the HomeWizard P1 meter is read directly, that is one value per second. The recording switches itself off at midnight. A day is about 3 MB. The simulation can replay such a file:
+
+```
+SCENARIO=file P1FILE=p1_2026-11-02.csv FROM=10:00 TO=16:00 python scripts/compare_smart_mode.py . 1.5.5 out.json
+```
+
+### Tips
+
+- Give each inverter and the P1 meter a fixed address (a DHCP reservation) in your router.
+- With several inverters, a spread threshold of 85 % (the default) keeps one SolarFlow 2400 running up to about 1900–2000 W.
+
+## Further reading
+
+The guides of Zendure-HA also apply to this integration:
+
+- [Installation and Zendure app token](https://github.com/Zendure/Zendure-HA/wiki/Installation)
+- [Fuse group](https://github.com/Zendure/Zendure-HA/wiki/Fuse-Group)
+- [Local MQTT (legacy devices)](https://github.com/Zendure/Zendure-HA/wiki/Local-Mqtt-(Legacy-Devices))
+- [Troubleshooting Hyper 2000](https://github.com/Zendure/Zendure-HA/wiki/Troubleshooting)
+- Tutorials: [Domotica & IoT](https://iotdomotica.nl/tutorial/install-zendure-home-assistant-integration-tutorial) 🇬🇧, [twoenter](https://www.twoenter.nl/blog/home-assistant-nl/zendure-thuisaccu-integratie-met-home-assistant/) 🇳🇱, [Kieft-C](https://github.com/Kieft-C/Zendure-BKW-PV/wiki/Installation-Zendure-Home-Assistant-integration-%E2%80%93-Tutorial) 🇩🇪
+
+## Reporting problems
+
+Open an [issue][issues] and attach *Download diagnostics* from the integration page. Secrets and serial numbers are redacted. Please do not report problems with this integration to the Zendure-HA project.
+
+## Contributing
+
+Pull requests are welcome. The tests run with `pytest` (`requirements_test.txt`). Changes to the control logic should come with a simulation run of `scripts/compare_smart_mode.py`.
 
 ## License
 
-MIT License, see [LICENSE](LICENSE). The copyright notice of the original project is kept.
+MIT License, see [LICENSE](LICENSE). The copyright notice of Zendure-HA is kept.
+
+[buymecoffee]: https://www.buymeacoffee.com/fireson
+[buymecoffeebadge]: https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png
+[license-shield]: https://img.shields.io/github/license/GruttePier013/Zendure-HA-GP013.svg?style=for-the-badge
+[hacs]: https://github.com/GruttePier013/Zendure-HA-GP013
+[hacsbadge]: https://img.shields.io/badge/HACS-Custom-orange.svg?style=for-the-badge
+[release]: https://github.com/GruttePier013/Zendure-HA-GP013/releases
+[releasebadge]: https://img.shields.io/github/v/release/GruttePier013/Zendure-HA-GP013?style=for-the-badge
+[issues]: https://github.com/GruttePier013/Zendure-HA-GP013/issues

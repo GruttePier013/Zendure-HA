@@ -91,6 +91,9 @@
       },
       "mqtt_local": {
         "name": "MQTT local connecté"
+      },
+      "cloud_mode": {
+        "name": "Mode nuages changeants"
       }
     },
     "number": {
@@ -423,10 +426,31 @@
         "name": "Écritures flash"
       },
       "role_discharge": {
-        "name": "Appareil de décharge"
+        "name": "Rôle de décharge"
       },
       "role_charge": {
-        "name": "Appareil de charge"
+        "name": "Rôle de charge"
+      },
+      "devices_not_responding": {
+        "name": "Appareils qui ne répondent pas"
+      },
+      "activity": {
+        "name": "Activité",
+        "state": {
+          "charging": "En charge",
+          "discharging": "En décharge",
+          "standby": "Veille",
+          "reserve": "Veille (réserve nuages)",
+          "not_responding": "Ne répond pas"
+        }
+      },
+      "role": {
+        "name": "Rôle",
+        "state": {
+          "charge": "Prêt à charger",
+          "discharge": "Prêt à décharger",
+          "none": "Aucun rôle"
+        }
       }
     },
     "select": {
@@ -499,8 +523,8 @@
           "off": "Arrêt",
           "manual": "Puissance manuelle",
           "smart": "Couplage intelligent",
-          "smart_discharging": "Décharge intelligente",
-          "smart_charging": "Charge intelligente",
+          "discharge": "Décharge intelligente",
+          "charge": "Charge intelligente",
           "store_solar": "Stocker le solaire"
         }
       },
@@ -578,16 +602,16 @@
     "step": {
       "init": {
         "title": "Paramètres Zendure HA-GP013",
-        "description": "Capteur P1 : {p1meter}\nJeton : {token}\nMQTT : {mqtt}\nRégulation de puissance (normale / rapide) : {control}\nSlew rate (montée / descente, délai de changement de sens) : {slew}\nDurée de vie : {lifetime}\nAdresses fixes des appareils : {addresses}\nJournal MQTT : {logging}, simulation : {simulation}\n\nChoisissez les paramètres à modifier.",
+        "description": "Capteur P1 : {p1meter}\nJeton : {token}\nMQTT : {mqtt}\nRégulation de puissance (normale / rapide) : {control}\nSlew rate (montée / descente, délai de changement de sens) : {slew}\nPlusieurs onduleurs : {lifetime}\nAdresses fixes des appareils : {addresses}\nJournal MQTT : {logging}, simulation : {simulation}\n\nChoisissez les paramètres à modifier.",
         "menu_options": {
           "connection": "Compte / jeton",
           "mqtt": "MQTT et Wi-Fi",
           "p1_meter": "Compteur P1",
           "power_control": "Régulation de puissance",
           "slew": "Slew rate et changement de sens",
-          "lifetime": "Durée de vie (flash et rôles)",
+          "lifetime": "Plusieurs onduleurs (répartition & rôles)",
           "device_ips": "Adresses des appareils",
-          "diagnostics": "Journalisation et simulation",
+          "diagnostics": "Journalisation, simulation et données de test",
           "finish": "Enregistrer et fermer"
         }
       },
@@ -614,9 +638,13 @@
       },
       "p1_meter": {
         "title": "Compteur P1",
-        "description": "Le capteur (en W) qui indique la puissance nette au point de raccordement au réseau.",
+        "description": "Le capteur (en W) qui indique la puissance nette au raccordement réseau. Un compteur P1 HomeWizard peut aussi être lu directement : le gestionnaire reçoit alors une nouvelle valeur chaque seconde au lieu d'environ toutes les 5 secondes (le capteur Home Assistant reste la solution de repli). Laissez l'adresse vide pour n'utiliser que le capteur.",
         "data": {
-          "p1meter": "Capteur P1 pour le couplage intelligent"
+          "p1meter": "Capteur P1 pour le couplage intelligent",
+          "p1_homewizard": "Adresse du compteur P1 HomeWizard (facultatif, lu chaque seconde)"
+        },
+        "data_description": {
+          "p1_homewizard": "Adresse IP du compteur P1 HomeWizard. Avec un jeton, l'API v2 est utilisée (WebSocket, le compteur envoie chaque télégramme) ; le jeton de l'intégration HomeWizard est utilisé s'il existe."
         }
       },
       "power_control": {
@@ -629,40 +657,52 @@
           "power_start": "Puissance minimale pour démarrer un appareil (W)",
           "power_tolerance": "Tolérance de puissance de l'appareil (W)",
           "manual_interval": "Intervalle de mise à jour en mode manuel (s)",
-          "peak_limit": "Limite d'écrêtage des pics (W, 0 = désactivé)"
+          "peak_limit": "Limite d'écrêtage des pics (W, 0 = désactivé)",
+          "export_bias": "Marge d'injection pendant la charge par nuages changeants (W, 0 = désactivé)"
         }
       },
       "slew": {
         "title": "Slew rate et changement de sens",
-        "description": "Limite la vitesse de variation de la puissance demandée et passe toujours par 0 W (avec une courte pause) lors du passage entre charge et décharge. Cela protège les relais et l'onduleur. Les valeurs sont des valeurs par défaut, pas des spécifications du fabricant. L'appareil prêt pour les pics peut démarrer plus vite depuis la veille ; un changement de sens utilise toujours la vitesse normale.",
+        "description": "Limite la vitesse de variation de la puissance demandée et passe toujours par 0 W (avec une courte pause) lors du passage entre charge et décharge. Cela protège les relais et l'onduleur. Les valeurs sont des valeurs par défaut, pas des spécifications du fabricant. L'appareil prêt pour les pics peut démarrer plus vite depuis la veille ; un changement de sens utilise toujours la vitesse normale. Un changement de sens est autorisé après 2 s dès que l'appareil indique 0 W, sinon après la pause maximale.",
         "data": {
           "slew_enabled": "Limiter la vitesse de variation de la puissance",
           "slew_up": "Augmentation maximale (W/s)",
           "slew_down": "Diminution maximale (W/s)",
-          "flip_delay": "Pause à 0 W lors du changement de sens (s)",
+          "flip_delay": "Pause maximale à 0 W lors du changement de sens, sans 0 W confirmé (s)",
           "min_run": "Durée de fonctionnement minimale d'un appareil démarré (s)",
-          "ready_rate": "Démarrage plus rapide de l'appareil prêt (W/s)"
+          "ready_rate": "Montée plus rapide : démarrage de l'appareil prêt et appareils déjà en marche dans le même sens (W/s)"
         }
       },
       "lifetime": {
-        "title": "Durée de vie (flash et rôles)",
-        "description": "Avec plusieurs appareils, l'un décharge et un autre charge. Un rôle ne passe à un autre appareil que si celui-ci a autant de points de SoC d'avance et que le rôle a été conservé au moins 5 minutes. L'état sûr enregistre une fois 0 W dans la mémoire flash de l'appareil, de sorte qu'un appareil qui redémarre commence à 0 W ; il est écrit au plus une fois par heure. La charge et la décharge utilisent le moins d'appareils possible : un autre appareil ne démarre que lorsque ceux en marche portent cette part de leur limite ; les autres restent prêts pour les pics, comme une bouilloire.",
+        "title": "Plusieurs onduleurs : répartition, rôles et flash",
+        "description": "Avec plusieurs onduleurs, la charge et la décharge utilisent aussi peu d'onduleurs que nécessaire (meilleur rendement) : un onduleur supplémentaire ne démarre que lorsque ceux en marche portent le seuil de répartition de leur limite ; en dessous, la puissance est regroupée sur moins d'onduleurs. Les autres restent prêts pour les pics comme une bouilloire. Un onduleur décharge et un autre charge ; un rôle ne passe à un autre onduleur que s'il a une avance de la marge de changement de rôle en SoC et que le rôle a été tenu au moins 5 minutes. L'état sûr enregistre une fois 0 W dans la flash de l'appareil, afin qu'un onduleur qui redémarre commence à 0 W ; au plus une fois par heure.",
         "data": {
           "role_margin": "Marge de changement de rôle (SoC %)",
-          "fill_level": "Charge par appareil avant le démarrage d'un autre (%)",
-          "flash_safe_state": "Enregistrer l'état sûr (0 W) dans la mémoire flash de l'appareil"
+          "fill_level": "Seuil de répartition (%)",
+          "flash_safe_state": "Enregistrer l'état sûr (0 W) dans la flash de l'appareil"
+        },
+        "data_description": {
+          "fill_level": "Charge par onduleur avant que la puissance soit répartie sur un onduleur de plus ; en dessous, elle est regroupée sur moins. 85 % avec 3 × 2400 W : 1 onduleur jusqu'à environ 1900–2000 W. Avec des nuages changeants, 70 % est utilisé."
         }
       },
       "device_ips": {
         "title": "Adresses des appareils",
-        "description": "Adresse IP ou nom d'hôte fixe par appareil zenSDK. Elle prime sur l'adresse issue du cloud et de mDNS, utile entre VLAN. Laissez vide pour une détection automatique.\n\n{devices}"
+        "description": "Adresse IP ou nom d'hôte fixe par appareil zenSDK. Elle prime sur l'adresse issue du cloud et de mDNS, utile entre VLAN. Laissez vide pour une détection automatique. La mention GUESSED signifie que le cloud n'a pas fourni d'IP : saisissez l'adresse IP.\n\n{devices}"
       },
       "diagnostics": {
-        "title": "Journalisation et simulation",
-        "description": "Options de débogage.",
+        "title": "Journalisation, simulation et données de test",
+        "description": "Options de débogage. L'enregistrement P1 écrit chaque valeur P1 (chaque seconde avec un compteur P1 HomeWizard lu directement) avec la puissance des batteries dans <config>/zendure_ha/p1_<date>.csv, comme données de test pour la simulation. Il s'arrête de lui-même à minuit.",
         "data": {
           "mqttlog": "Journaliser la communication MQTT",
-          "simulation": "Mode simulation"
+          "simulation": "Mode simulation",
+          "p1_record": "Enregistrer P1 chaque seconde jusqu'à minuit (données de test)"
+        }
+      },
+      "p1_token": {
+        "title": "Compteur P1 HomeWizard : jeton",
+        "description": "Pour lire le compteur P1 à {host} via l'API v2, un jeton est nécessaire. Appuyez sur le bouton du compteur P1 et cliquez sur Valider dans les 30 secondes.\n\nOu cochez API v1 : le compteur est alors lu chaque seconde via l'API locale (activez « API locale » dans l'application HomeWizard).",
+        "data": {
+          "use_v1": "Utiliser l'API v1 (API locale) au lieu d'un jeton"
         }
       }
     },
@@ -676,7 +716,10 @@
       "unknown": "Erreur inattendue",
       "mqtt_server_required": "Saisissez l'adresse du serveur MQTT.",
       "fast_longer_than_normal": "L'intervalle rapide ne peut pas être plus long que l'intervalle normal.",
-      "invalid_address": "Saisissez une adresse IP ou un nom d'hôte valide."
+      "invalid_address": "Saisissez une adresse IP ou un nom d'hôte valide.",
+      "homewizard_press_button": "Le compteur P1 n'a pas encore donné de jeton : appuyez sur son bouton et cliquez sur Valider dans les 30 secondes.",
+      "homewizard_unreachable": "Le compteur P1 HomeWizard ne répond pas à cette adresse.",
+      "homewizard_v1_unreachable": "Le compteur P1 ne répond pas via l'API v1 : activez « API locale » dans l'application HomeWizard."
     }
   },
   "issues": {
@@ -691,6 +734,10 @@
     "mqtt_local_disconnected": {
       "title": "Le broker MQTT local n'est pas connecté",
       "description": "Home Assistant n'est pas connecté au serveur MQTT local {server}. Vérifiez que le broker fonctionne et que l'utilisateur et le mot de passe sont corrects. Le problème disparaît dès que la connexion est rétablie."
+    },
+    "zensdk_no_address": {
+      "title": "Aucune adresse connue pour {name}",
+      "description": "Le cloud Zendure n'a pas fourni d'adresse IP pour {name}, l'intégration a donc essayé le nom construit {address}, qui ne répond pas. Saisissez l'adresse IP de l'appareil (application Zendure, informations de l'appareil, ou la liste DHCP de votre routeur) dans Configurer, Adresses des appareils. Une adresse DHCP fixe est recommandée. En attendant, l'appareil ne fonctionne qu'avec la connexion sur cloud."
     }
   }
 }

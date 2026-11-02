@@ -7,7 +7,7 @@ import re
 from typing import Any
 
 import voluptuous as vol
-from homeassistant.config_entries import ConfigFlow, ConfigFlowResult, OptionsFlow
+from homeassistant.config_entries import ConfigEntryState, ConfigFlow, ConfigFlowResult, OptionsFlow
 from homeassistant.core import callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import selector
@@ -17,6 +17,7 @@ from .const import (
     CONF_APPTOKEN,
     CONF_AUTO_MQTT_USER,
     CONF_DEVICE_IPS,
+    CONF_EXPORT_BIAS,
     CONF_FILL_LEVEL,
     CONF_FLASH_SAFE,
     CONF_FLIP_DELAY,
@@ -29,6 +30,9 @@ from .const import (
     CONF_MQTTSERVER,
     CONF_MQTTUSER,
     CONF_P1_STDDEV_MIN,
+    CONF_P1_HOMEWIZARD,
+    CONF_P1_RECORD,
+    CONF_P1_TOKEN,
     CONF_P1METER,
     CONF_PEAK_LIMIT,
     CONF_READY_RATE,
@@ -201,6 +205,10 @@ class ZendureOptionsFlowHandler(OptionsFlow):
         """Merge values into the config entry data."""
         self.hass.config_entries.async_update_entry(self.config_entry, data={**self.config_entry.data, **values})
         self._reload |= reload
+        if not reload and self.config_entry.state is ConfigEntryState.LOADED:
+            from . import apply_entry_settings
+
+            apply_entry_settings(self.config_entry)
 
     def _setting(self, key: str, default: Any = None) -> Any:
         return self.config_entry.data.get(key, default)
@@ -212,33 +220,74 @@ class ZendureOptionsFlowHandler(OptionsFlow):
             config["unit_of_measurement"] = unit
         return selector.NumberSelector(config)
 
+    def _word(self, key: str) -> str:
+        """A word of the settings overview in the language of Home Assistant (English when unknown)."""
+        language = (self.hass.config.language or "en").split("-")[0]
+        return SUMMARY_WORDS.get(language, SUMMARY_WORDS["en"]).get(key, SUMMARY_WORDS["en"][key])
+
+    def _record_summary(self) -> str:
+        """The P1 recording, when it runs today."""
+        from homeassistant.util import dt as dt_util
+
+        if self._setting(CONF_P1_RECORD, "") != dt_util.now().date().isoformat():
+            return ""
+        return f", {self._word('recording')} p1_{dt_util.now().date().isoformat()}.csv"
+
+    def _p1_summary(self) -> str:
+        """How the HomeWizard P1 meter is read: API version, whose token, and whether it answers now."""
+        from .p1direct import homewizard_entry
+
+        data = self.config_entry.data
+        if not (host := data.get(CONF_P1_HOMEWIZARD)):
+            return ""
+        if data.get(CONF_P1_TOKEN):
+            how = f"API v2, {self._word('own_token')}"
+        else:
+            hw_host, hw_token = homewizard_entry(self.hass, data.get(CONF_P1METER))
+            how = f"API v2, {self._word('hw_token')}" if hw_token and hw_host == host else "API v1"
+        meter = getattr(getattr(self.config_entry, "runtime_data", None), "p1direct", None)
+        if meter is None:
+            state = self._word("not_running")
+        elif meter.healthy:
+            state = self._word("every_second")
+        elif meter.readings == 0 and meter.failures == 0:
+            state = self._word("connecting")
+        else:
+            state = self._word("not_answering")
+        return f" + HomeWizard {host} ({how}, {state})"
+
     def _summary(self) -> dict[str, str]:
         """Overview of the current settings, shown above the menu."""
         data = self.config_entry.data
         local = data.get(CONF_MQTTLOCAL, False)
         slew = data.get(CONF_SLEW_ENABLED, True)
+        w = self._word
+
+        def onoff(value: bool) -> str:
+            return w("on") if value else w("off")
+
         return {
-            "p1meter": str(data.get(CONF_P1METER) or "-"),
-            "token": "set" if data.get(CONF_APPTOKEN) else "missing",
-            "mqtt": f"local ({data.get(CONF_MQTTSERVER, '?')}:{data.get(CONF_MQTTPORT, 1883)})" if local else "cloud",
+            "p1meter": str(data.get(CONF_P1METER) or "-") + self._p1_summary(),
+            "token": w("set") if data.get(CONF_APPTOKEN) else w("missing"),
+            "mqtt": f"{w('local')} ({data.get(CONF_MQTTSERVER, '?')}:{data.get(CONF_MQTTPORT, 1883)})" if local else w("cloud"),
             "control": (
-                f"{data.get(CONF_TIMEZERO, CONTROL_DEFAULTS[CONF_TIMEZERO])} s / "
-                f"{data.get(CONF_TIMEFAST, CONTROL_DEFAULTS[CONF_TIMEFAST])} s, "
-                f"start {data.get(CONF_POWER_START, CONTROL_DEFAULTS[CONF_POWER_START])} W"
+                f"{_n(data.get(CONF_TIMEZERO, CONTROL_DEFAULTS[CONF_TIMEZERO]))} s / "
+                f"{_n(data.get(CONF_TIMEFAST, CONTROL_DEFAULTS[CONF_TIMEFAST]))} s, "
+                f"{w('start')} {_n(data.get(CONF_POWER_START, CONTROL_DEFAULTS[CONF_POWER_START]))} W"
             ),
             "slew": (
-                f"{data.get(CONF_SLEW_UP, DEFAULT_UP)} / {data.get(CONF_SLEW_DOWN, DEFAULT_DOWN)} W/s, {data.get(CONF_FLIP_DELAY, DEFAULT_FLIP_DELAY)} s"
+                f"{_n(data.get(CONF_SLEW_UP, DEFAULT_UP))} / {_n(data.get(CONF_SLEW_DOWN, DEFAULT_DOWN))} W/s, {_n(data.get(CONF_FLIP_DELAY, DEFAULT_FLIP_DELAY))} s"
                 if slew
-                else "off"
+                else w("off")
             ),
             "lifetime": (
-                f"role margin {data.get(CONF_ROLE_MARGIN, CONTROL_DEFAULTS[CONF_ROLE_MARGIN])}%, "
-                f"fill level {data.get(CONF_FILL_LEVEL, CONTROL_DEFAULTS[CONF_FILL_LEVEL])}%, "
-                f"flash safe state {'on' if data.get(CONF_FLASH_SAFE, True) else 'off'}"
+                f"{w('spread')} {_n(data.get(CONF_FILL_LEVEL, CONTROL_DEFAULTS[CONF_FILL_LEVEL]))}%, "
+                f"{w('role_margin')} {_n(data.get(CONF_ROLE_MARGIN, CONTROL_DEFAULTS[CONF_ROLE_MARGIN]))}%, "
+                f"{w('flash')} {onoff(data.get(CONF_FLASH_SAFE, True))}"
             ),
             "addresses": str(len(data.get(CONF_DEVICE_IPS) or {})),
-            "logging": "on" if data.get(CONF_MQTTLOG, False) else "off",
-            "simulation": "on" if data.get(CONF_SIM, False) else "off",
+            "logging": onoff(data.get(CONF_MQTTLOG, False)),
+            "simulation": onoff(data.get(CONF_SIM, False)) + self._record_summary(),
         }
 
     # ----------------------------------------------------------------------------------------
@@ -336,12 +385,74 @@ class ZendureOptionsFlowHandler(OptionsFlow):
     # P1 meter
     # ----------------------------------------------------------------------------------------
     async def async_step_p1_meter(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
-        if user_input is not None:
-            self._store(user_input)
-            return await self.async_step_init()
+        from .p1direct import UnauthorizedError, homewizard_entry, read_once
 
-        schema = vol.Schema({vol.Required(CONF_P1METER): selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor"))})
-        return self.async_show_form(step_id="p1_meter", data_schema=self.add_suggested_values_to_schema(schema, self.config_entry.data))
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            host = str(user_input.get(CONF_P1_HOMEWIZARD) or "").strip()
+            sensor = user_input[CONF_P1METER]
+            if not host:  # an emptied field is not sent: store "" to switch reading the meter directly off
+                self._store({CONF_P1METER: sensor, CONF_P1_HOMEWIZARD: "", CONF_P1_TOKEN: ""})
+                return await self.async_step_init()
+
+            # a token that is known for this address: ours, or the one of the HomeWizard integration (API v2)
+            token = self._setting(CONF_P1_TOKEN) if host == self._setting(CONF_P1_HOMEWIZARD) else None
+            hw_host, hw_token = homewizard_entry(self.hass, sensor)
+            for candidate, own in ((token, True), (hw_token if hw_host == host else None, False)):
+                if not candidate:
+                    continue
+                try:
+                    if await read_once(self.hass, host, candidate) is not None:
+                        self._store({CONF_P1METER: sensor, CONF_P1_HOMEWIZARD: host, CONF_P1_TOKEN: candidate if own else ""})
+                        return await self.async_step_init()
+                except UnauthorizedError:
+                    continue
+                except Exception:  # noqa: BLE001 - tried again with a token of our own in the next step
+                    continue
+            self._p1_pending = {CONF_P1METER: sensor, CONF_P1_HOMEWIZARD: host}
+            return await self.async_step_p1_token()
+
+        schema = vol.Schema(
+            {
+                vol.Required(CONF_P1METER): selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor")),
+                vol.Optional(CONF_P1_HOMEWIZARD): selector.TextSelector(),
+            }
+        )
+        current = dict(self.config_entry.data)
+        if not current.get(CONF_P1_HOMEWIZARD) and (found := homewizard_entry(self.hass, current.get(CONF_P1METER))[0]):
+            current[CONF_P1_HOMEWIZARD] = found  # suggested: the address of the HomeWizard meter of the P1 sensor
+        return self.async_show_form(step_id="p1_meter", data_schema=self.add_suggested_values_to_schema(schema, current), errors=errors)
+
+    async def async_step_p1_token(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """Get an API v2 token from the HomeWizard P1 meter (press its button), or use API v1."""
+        from .p1direct import read_once, request_token
+
+        pending = getattr(self, "_p1_pending", None)
+        if pending is None:
+            return await self.async_step_p1_meter()
+        host = pending[CONF_P1_HOMEWIZARD]
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            if user_input.get("use_v1"):
+                try:
+                    ok = await read_once(self.hass, host, None) is not None
+                except Exception:  # noqa: BLE001
+                    ok = False
+                if ok:
+                    self._store({**pending, CONF_P1_TOKEN: ""})
+                    return await self.async_step_init()
+                errors["base"] = "homewizard_v1_unreachable"
+            else:
+                token, reason = await request_token(self.hass, host)
+                if token:
+                    self._store({**pending, CONF_P1_TOKEN: token})
+                    return await self.async_step_init()
+                errors["base"] = "homewizard_press_button" if reason == "button" else "homewizard_unreachable"
+                if reason != "button":
+                    _LOGGER.warning("No token from HomeWizard P1 %s: %s", host, reason)
+
+        schema = vol.Schema({vol.Optional("use_v1", default=False): selector.BooleanSelector()})
+        return self.async_show_form(step_id="p1_token", data_schema=schema, errors=errors, description_placeholders={"host": host})
 
     # ----------------------------------------------------------------------------------------
     # power control (how fast and how sensitive the manager follows the P1 meter)
@@ -364,6 +475,7 @@ class ZendureOptionsFlowHandler(OptionsFlow):
                 vol.Required(CONF_POWER_TOLERANCE): self._number(0, 100, 1, "W"),
                 vol.Required(CONF_MANUAL_INTERVAL): self._number(4, 300, 1, "s"),
                 vol.Required(CONF_PEAK_LIMIT): self._number(0, 20000, 50, "W"),
+                vol.Required(CONF_EXPORT_BIAS): self._number(0, 500, 10, "W"),
             }
         )
         current = {key: self._setting(key, default) for key, default in CONTROL_DEFAULTS.items()}
@@ -426,12 +538,12 @@ class ZendureOptionsFlowHandler(OptionsFlow):
     # ----------------------------------------------------------------------------------------
     # fixed addresses of zenSDK devices (cloud / mDNS does not report one across VLANs)
     # ----------------------------------------------------------------------------------------
-    def _zensdk_devices(self) -> dict[str, str]:
-        """Serial number -> name of the devices that are read over the local zenSDK."""
+    def _zensdk_devices(self) -> dict[str, Any]:
+        """Serial number -> device, for the devices that can be read over the local zenSDK."""
         from .device import ZendureZenSdk
 
         manager = getattr(self.config_entry, "runtime_data", None)
-        return {d.snNumber: d.name for d in getattr(manager, "devices", []) if isinstance(d, ZendureZenSdk)}
+        return {d.snNumber: d for d in getattr(manager, "devices", []) if isinstance(d, ZendureZenSdk)}
 
     async def async_step_device_ips(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         errors: dict[str, str] = {}
@@ -451,10 +563,22 @@ class ZendureOptionsFlowHandler(OptionsFlow):
                 return await self.async_step_init()
 
         schema = vol.Schema({vol.Optional(serial): str for serial in serials})
-        listing = "\n".join(f"{serial} = {devices.get(serial, '?')}" for serial in serials) or "-"
+        sources = {"cloud": "cloud", "manual": "manual", "discovery": "mDNS", "guess": "GUESSED name, probably not reachable"}
+
+        def describe(serial: str) -> str:
+            if (d := devices.get(serial)) is None:
+                return f"{serial} = ? (device not loaded)"
+            return f"{serial} = {d.name}: {d.ipAddress} ({sources.get(getattr(d, 'address_source', ''), '?')})"
+
+        listing = "\n".join(describe(serial) for serial in serials) or "-"
+        # prefill with the address in use when it is a real one (cloud or mDNS), so it can be checked or fixed
+        suggested = {
+            serial: d.ipAddress for serial, d in devices.items() if getattr(d, "address_source", "") in ("cloud", "discovery")
+        }
+        suggested.update(known)
         return self.async_show_form(
             step_id="device_ips",
-            data_schema=self.add_suggested_values_to_schema(schema, user_input or known),
+            data_schema=self.add_suggested_values_to_schema(schema, user_input or suggested),
             errors=errors,
             description_placeholders={"devices": listing},
         )
@@ -463,12 +587,21 @@ class ZendureOptionsFlowHandler(OptionsFlow):
     # diagnostics / logging
     # ----------------------------------------------------------------------------------------
     async def async_step_diagnostics(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        from homeassistant.util import dt as dt_util
+
+        today = dt_util.now().date().isoformat()
         if user_input is not None:
+            # the recording runs on the stored date only and switches itself off at midnight
+            user_input[CONF_P1_RECORD] = today if user_input.get(CONF_P1_RECORD) else ""
             self._store(user_input)
             return await self.async_step_init()
 
-        schema = vol.Schema({vol.Required(CONF_MQTTLOG): bool, vol.Required(CONF_SIM): bool})
-        current = {CONF_MQTTLOG: self._setting(CONF_MQTTLOG, False), CONF_SIM: self._setting(CONF_SIM, False)}
+        schema = vol.Schema({vol.Required(CONF_MQTTLOG): bool, vol.Required(CONF_SIM): bool, vol.Optional(CONF_P1_RECORD, default=False): bool})
+        current = {
+            CONF_MQTTLOG: self._setting(CONF_MQTTLOG, False),
+            CONF_SIM: self._setting(CONF_SIM, False),
+            CONF_P1_RECORD: self._setting(CONF_P1_RECORD, "") == today,
+        }
         return self.async_show_form(step_id="diagnostics", data_schema=self.add_suggested_values_to_schema(schema, current))
 
 
@@ -478,3 +611,37 @@ class ZendureConnectionError(HomeAssistantError):
     def __init__(self) -> None:
         """Initialize the connection error."""
         super().__init__("Zendure HA-GP013")
+
+
+def _n(value: Any) -> str:
+    """A number without a needless .0 (70.0 -> 70, 4.5 -> 4.5)."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    return str(int(number)) if number.is_integer() else str(number)
+
+
+# words of the settings overview above the options menu (the placeholders are not translated by Home Assistant)
+SUMMARY_WORDS: dict[str, dict[str, str]] = {
+    "en": {"recording": "P1 recording until 00:00 in", "set": "set", "missing": "missing", "local": "local", "cloud": "cloud", "start": "start", "on": "on", "off": "off",
+           "spread": "spread threshold", "role_margin": "role switch margin", "flash": "safe state in flash",
+           "own_token": "own token", "hw_token": "token of the HomeWizard integration", "every_second": "every second",
+           "connecting": "connecting", "not_answering": "not answering, the sensor is used", "not_running": "not running"},
+    "nl": {"recording": "P1-opname tot 00:00 in", "set": "ingesteld", "missing": "ontbreekt", "local": "lokaal", "cloud": "cloud", "start": "start", "on": "aan", "off": "uit",
+           "spread": "spreiddrempel", "role_margin": "rolwisselmarge", "flash": "veilige stand in flash",
+           "own_token": "eigen token", "hw_token": "token van de HomeWizard-integratie", "every_second": "elke seconde",
+           "connecting": "verbinden", "not_answering": "antwoordt niet, de sensor wordt gebruikt", "not_running": "niet actief"},
+    "de": {"recording": "P1-Aufzeichnung bis 00:00 in", "set": "gesetzt", "missing": "fehlt", "local": "lokal", "cloud": "Cloud", "start": "Start", "on": "an", "off": "aus",
+           "spread": "Verteilschwelle", "role_margin": "Rollenwechsel-Marge", "flash": "sicherer Zustand im Flash",
+           "own_token": "eigenes Token", "hw_token": "Token der HomeWizard-Integration", "every_second": "jede Sekunde",
+           "connecting": "verbinde", "not_answering": "antwortet nicht, der Sensor wird verwendet", "not_running": "nicht aktiv"},
+    "fr": {"recording": "enregistrement P1 jusqu'à 00:00 dans", "set": "défini", "missing": "manquant", "local": "local", "cloud": "cloud", "start": "démarrage", "on": "activé", "off": "désactivé",
+           "spread": "seuil de répartition", "role_margin": "marge de changement de rôle", "flash": "état sûr en flash",
+           "own_token": "jeton propre", "hw_token": "jeton de l'intégration HomeWizard", "every_second": "chaque seconde",
+           "connecting": "connexion", "not_answering": "ne répond pas, le capteur est utilisé", "not_running": "inactif"},
+    "pl": {"recording": "nagrywanie P1 do 00:00 w", "set": "ustawiony", "missing": "brak", "local": "lokalny", "cloud": "chmura", "start": "start", "on": "wł.", "off": "wył.",
+           "spread": "próg rozkładu", "role_margin": "margines zmiany roli", "flash": "stan bezpieczny we flashu",
+           "own_token": "własny token", "hw_token": "token integracji HomeWizard", "every_second": "co sekundę",
+           "connecting": "łączenie", "not_answering": "nie odpowiada, używany jest czujnik", "not_running": "nieaktywny"},
+}

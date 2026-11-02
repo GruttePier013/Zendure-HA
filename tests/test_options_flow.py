@@ -62,7 +62,7 @@ async def test_slew_step_stores_values_and_returns_to_menu(hass, entry) -> None:
 async def test_power_control_rejects_fast_longer_than_normal(hass, entry) -> None:  # noqa: ANN001
     result = await _menu(hass, entry)
     result = await hass.config_entries.options.async_configure(result["flow_id"], {"next_step_id": "power_control"})
-    values = {CONF_TIMEZERO: 4, CONF_TIMEFAST: 9, "p1_stddev_min": 15, "power_start": 50, "power_tolerance": 5, "manual_interval": 15, "peak_limit": 0}
+    values = {CONF_TIMEZERO: 4, CONF_TIMEFAST: 9, "p1_stddev_min": 15, "power_start": 50, "power_tolerance": 5, "manual_interval": 15, "peak_limit": 0, "export_bias": 100}
     result = await hass.config_entries.options.async_configure(result["flow_id"], values)
     assert result["type"] is FlowResultType.FORM
     assert result["errors"] == {CONF_TIMEFAST: "fast_longer_than_normal"}
@@ -129,3 +129,59 @@ async def test_device_ips_validates_and_stores_addresses(hass, entry) -> None:  
     result = await hass.config_entries.options.async_configure(result["flow_id"], {"next_step_id": "device_ips"})
     result = await hass.config_entries.options.async_configure(result["flow_id"], {"SN1": ""})
     assert entry.data["device_ips"] == {}
+
+
+def test_settings_are_applied_without_an_update_listener() -> None:
+    """HA 2026.12: no update listener; the flow applies non-reload settings directly."""
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+
+    import custom_components.zendure_ha as integration
+
+    assert not hasattr(integration, "update_listener")
+    manager = MagicMock()
+    entry = SimpleNamespace(entry_id="x", data={"slew_up": 300}, runtime_data=manager)
+    integration.apply_entry_settings(entry)
+    manager.apply_settings.assert_called_once_with({"slew_up": 300})
+
+
+async def test_p1_meter_direct_reading_asks_for_a_token(hass, entry) -> None:  # noqa: ANN001
+    result = await _menu(hass, entry)
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {"next_step_id": "p1_meter"})
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {CONF_P1METER: "sensor.p1", "p1_homewizard": " 192.168.1.30 "})
+    assert result["step_id"] == "p1_token"
+    assert result["description_placeholders"] == {"host": "192.168.1.30"}
+
+    with patch("custom_components.zendure_ha.p1direct.request_token", AsyncMock(return_value=(None, "button"))):
+        result = await hass.config_entries.options.async_configure(result["flow_id"], {"use_v1": False})
+    assert result["errors"] == {"base": "homewizard_press_button"}
+
+    with patch("custom_components.zendure_ha.p1direct.request_token", AsyncMock(return_value=("A" * 32, ""))):
+        result = await hass.config_entries.options.async_configure(result["flow_id"], {"use_v1": False})
+    assert result["type"] is FlowResultType.MENU
+    assert entry.data["p1_homewizard"] == "192.168.1.30"
+    assert entry.data["p1_homewizard_token"] == "A" * 32
+
+
+async def test_p1_meter_api_v1_and_switch_off(hass, entry) -> None:  # noqa: ANN001
+    result = await _menu(hass, entry)
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {"next_step_id": "p1_meter"})
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {CONF_P1METER: "sensor.p1", "p1_homewizard": "192.168.1.30"})
+    with patch("custom_components.zendure_ha.p1direct.read_once", AsyncMock(return_value=350)):
+        result = await hass.config_entries.options.async_configure(result["flow_id"], {"use_v1": True})
+    assert result["type"] is FlowResultType.MENU
+    assert entry.data["p1_homewizard_token"] == ""
+
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {"next_step_id": "p1_meter"})
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {CONF_P1METER: "sensor.p1"})
+    assert entry.data["p1_homewizard"] == ""
+
+
+async def test_overview_in_the_language_of_home_assistant(hass, entry) -> None:  # noqa: ANN001
+    hass.config.language = "nl"
+    hass.config_entries.async_update_entry(entry, data={**entry.data, "fill_level": 70.0, "p1_homewizard": "192.168.1.151", "p1_homewizard_token": ""})
+    result = await _menu(hass, entry)
+    placeholders = result["description_placeholders"]
+    assert placeholders["lifetime"].startswith("spreiddrempel 70%")
+    assert placeholders["p1meter"] == "sensor.p1 + HomeWizard 192.168.1.151 (API v1, niet actief)"
+    assert placeholders["logging"] == "uit"

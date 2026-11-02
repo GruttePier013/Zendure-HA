@@ -91,6 +91,9 @@
       },
       "mqtt_local": {
         "name": "Lokalny MQTT połączony"
+      },
+      "cloud_mode": {
+        "name": "Tryb zmiennego zachmurzenia"
       }
     },
     "number": {
@@ -423,10 +426,31 @@
         "name": "Zapisy do pamięci flash"
       },
       "role_discharge": {
-        "name": "Urządzenie rozładowujące"
+        "name": "Rola rozładowania"
       },
       "role_charge": {
-        "name": "Urządzenie ładujące"
+        "name": "Rola ładowania"
+      },
+      "devices_not_responding": {
+        "name": "Urządzenia, które nie odpowiadają"
+      },
+      "activity": {
+        "name": "Aktywność",
+        "state": {
+          "charging": "Ładuje",
+          "discharging": "Rozładowuje",
+          "standby": "Czuwanie",
+          "reserve": "Czuwanie (rezerwa chmur)",
+          "not_responding": "Nie odpowiada"
+        }
+      },
+      "role": {
+        "name": "Rola",
+        "state": {
+          "charge": "Gotowe do ładowania",
+          "discharge": "Gotowe do rozładowania",
+          "none": "Brak roli"
+        }
       }
     },
     "select": {
@@ -499,8 +523,8 @@
           "off": "Wyłączony",
           "manual": "Ręczne ustawianie mocy",
           "smart": "Inteligentne dopasowanie",
-          "smart_discharging": "Inteligentne rozładowanie",
-          "smart_charging": "Inteligentne ładowanie",
+          "discharge": "Inteligentne rozładowanie",
+          "charge": "Inteligentne ładowanie",
           "store_solar": "Magazynowanie energii słonecznej"
         }
       },
@@ -578,16 +602,16 @@
     "step": {
       "init": {
         "title": "Ustawienia Zendure HA-GP013",
-        "description": "Czujnik P1: {p1meter}\nToken: {token}\nMQTT: {mqtt}\nRegulacja mocy (normalna / szybka): {control}\nSlew rate (w górę / w dół, opóźnienie zmiany kierunku): {slew}\nŻywotność: {lifetime}\nStałe adresy urządzeń: {addresses}\nLogowanie MQTT: {logging}, symulacja: {simulation}\n\nWybierz ustawienia, które chcesz zmienić.",
+        "description": "Czujnik P1: {p1meter}\nToken: {token}\nMQTT: {mqtt}\nRegulacja mocy (normalna / szybka): {control}\nSlew rate (w górę / w dół, opóźnienie zmiany kierunku): {slew}\nWiele falowników: {lifetime}\nStałe adresy urządzeń: {addresses}\nLogowanie MQTT: {logging}, symulacja: {simulation}\n\nWybierz ustawienia, które chcesz zmienić.",
         "menu_options": {
           "connection": "Konto / token",
           "mqtt": "MQTT i Wi-Fi",
           "p1_meter": "Licznik P1",
           "power_control": "Regulacja mocy",
           "slew": "Slew rate i zmiana kierunku",
-          "lifetime": "Żywotność (flash i role)",
+          "lifetime": "Wiele falowników (rozkład i role)",
           "device_ips": "Adresy urządzeń",
-          "diagnostics": "Logowanie i symulacja",
+          "diagnostics": "Logowanie, symulacja i dane testowe",
           "finish": "Zapisz i zamknij"
         }
       },
@@ -614,9 +638,13 @@
       },
       "p1_meter": {
         "title": "Licznik P1",
-        "description": "Czujnik (w W) podający moc netto na przyłączu do sieci.",
+        "description": "Czujnik (w W), który podaje moc netto na przyłączu sieciowym. Licznik P1 HomeWizard można też odczytywać bezpośrednio: menedżer otrzymuje wtedy nową wartość co sekundę zamiast mniej więcej co 5 sekund (czujnik Home Assistant pozostaje rozwiązaniem awaryjnym). Pozostaw adres pusty, aby używać tylko czujnika.",
         "data": {
-          "p1meter": "Czujnik P1 do inteligentnego dopasowania"
+          "p1meter": "Czujnik P1 do inteligentnego dopasowania",
+          "p1_homewizard": "Adres licznika P1 HomeWizard (opcjonalnie, odczyt co sekundę)"
+        },
+        "data_description": {
+          "p1_homewizard": "Adres IP licznika P1 HomeWizard. Z tokenem używane jest API v2 (WebSocket, licznik wysyła każdy telegram); używany jest token integracji HomeWizard, jeśli go ma."
         }
       },
       "power_control": {
@@ -629,40 +657,52 @@
           "power_start": "Minimalna moc do uruchomienia urządzenia (W)",
           "power_tolerance": "Tolerancja mocy urządzenia (W)",
           "manual_interval": "Interwał aktualizacji w trybie ręcznym (s)",
-          "peak_limit": "Limit redukcji szczytów (W, 0 = wyłączony)"
+          "peak_limit": "Limit redukcji szczytów (W, 0 = wyłączony)",
+          "export_bias": "Margines eksportu podczas ładowania przy zmiennym zachmurzeniu (W, 0 = wyłączony)"
         }
       },
       "slew": {
         "title": "Slew rate i zmiana kierunku",
-        "description": "Ogranicza szybkość zmian żądanej mocy i przy przejściu między ładowaniem a rozładowaniem zawsze przechodzi przez 0 W (z krótką pauzą). Chroni to przekaźniki i falownik. Wartości są domyślne, a nie specyfikacją producenta. Urządzenie w gotowości na szczyty może startować szybciej ze stanu czuwania; zmiana kierunku zawsze używa normalnej szybkości.",
+        "description": "Ogranicza szybkość zmian żądanej mocy i przy przejściu między ładowaniem a rozładowaniem zawsze przechodzi przez 0 W (z krótką pauzą). Chroni to przekaźniki i falownik. Wartości są domyślne, a nie specyfikacją producenta. Urządzenie w gotowości na szczyty może startować szybciej ze stanu czuwania; zmiana kierunku zawsze używa normalnej szybkości. Zmiana kierunku następuje po 2 s, gdy urządzenie zgłosi 0 W, w przeciwnym razie po maksymalnej pauzie.",
         "data": {
           "slew_enabled": "Ogranicz szybkość zmian mocy",
           "slew_up": "Maksymalny wzrost (W/s)",
           "slew_down": "Maksymalny spadek (W/s)",
-          "flip_delay": "Pauza przy 0 W podczas zmiany kierunku (s)",
+          "flip_delay": "Maksymalna pauza przy 0 W podczas zmiany kierunku, bez potwierdzonego 0 W (s)",
           "min_run": "Minimalny czas pracy uruchomionego urządzenia (s)",
-          "ready_rate": "Szybszy start urządzenia w gotowości (W/s)"
+          "ready_rate": "Szybszy wzrost: start urządzenia w gotowości i urządzeń już pracujących w tym samym kierunku (W/s)"
         }
       },
       "lifetime": {
-        "title": "Żywotność (flash i role)",
-        "description": "Przy kilku urządzeniach jedno rozładowuje, a inne ładuje. Rola przechodzi na inne urządzenie dopiero, gdy ma ono tyle punktów SoC przewagi, a rola była utrzymana co najmniej 5 minut. Stan bezpieczny zapisuje jednorazowo 0 W w pamięci flash urządzenia, dzięki czemu urządzenie po restarcie startuje z 0 W; zapis następuje najwyżej raz na godzinę. Ładowanie i rozładowanie używają jak najmniej urządzeń: kolejne rusza dopiero, gdy pracujące niosą tę część swojego limitu; pozostałe czekają w gotowości na szczyty, np. czajnik.",
+        "title": "Wiele falowników: rozkład, role i flash",
+        "description": "Przy wielu falownikach ładowanie i rozładowanie używa jak najmniejszej liczby falowników (lepsza sprawność): kolejny falownik startuje dopiero, gdy pracujące niosą próg rozkładu swojego limitu; poniżej moc jest ponownie łączona na mniej falowników. Pozostałe są gotowe na szczyty, np. czajnik. Jeden falownik rozładowuje, a inny ładuje; rola przechodzi na inny falownik dopiero, gdy ma on przewagę marginesu zmiany roli w SoC i rola była utrzymywana co najmniej 5 minut. Stan bezpieczny zapisuje raz 0 W we flashu urządzenia, aby falownik po restarcie zaczynał od 0 W; najwyżej raz na godzinę.",
         "data": {
           "role_margin": "Margines zmiany roli (SoC %)",
-          "fill_level": "Obciążenie urządzenia, zanim ruszy kolejne (%)",
-          "flash_safe_state": "Zapisz stan bezpieczny (0 W) w pamięci flash urządzenia"
+          "fill_level": "Próg rozkładu (%)",
+          "flash_safe_state": "Zapisz stan bezpieczny (0 W) we flashu urządzenia"
+        },
+        "data_description": {
+          "fill_level": "Obciążenie na falownik, zanim moc zostanie rozłożona na kolejny falownik; poniżej jest łączona na mniej. 85% przy 3 × 2400 W: 1 falownik do około 1900–2000 W. Przy szybko zmieniającym się zachmurzeniu stosowane jest 70%."
         }
       },
       "device_ips": {
         "title": "Adresy urządzeń",
-        "description": "Stały adres IP lub nazwa hosta dla każdego urządzenia zenSDK. Ma pierwszeństwo przed adresem z chmury i mDNS, co jest przydatne między sieciami VLAN. Pozostaw puste dla automatycznego wykrywania.\n\n{devices}"
+        "description": "Stały adres IP lub nazwa hosta dla każdego urządzenia zenSDK. Ma pierwszeństwo przed adresem z chmury i mDNS, co jest przydatne między sieciami VLAN. Pozostaw puste dla automatycznego wykrywania. Oznaczenie GUESSED oznacza, że chmura nie podała IP: wprowadź adres IP.\n\n{devices}"
       },
       "diagnostics": {
-        "title": "Logowanie i symulacja",
-        "description": "Opcje debugowania.",
+        "title": "Logowanie, symulacja i dane testowe",
+        "description": "Opcje debugowania. Nagrywanie P1 zapisuje każdą wartość P1 (co sekundę przy bezpośrednio odczytywanym liczniku P1 HomeWizard) wraz z mocą baterii do <config>/zendure_ha/p1_<data>.csv jako dane testowe dla symulacji. Wyłącza się samo o północy.",
         "data": {
           "mqttlog": "Loguj komunikację MQTT",
-          "simulation": "Tryb symulacji"
+          "simulation": "Tryb symulacji",
+          "p1_record": "Nagrywaj P1 co sekundę do północy (dane testowe)"
+        }
+      },
+      "p1_token": {
+        "title": "Licznik P1 HomeWizard: token",
+        "description": "Aby odczytywać licznik P1 pod adresem {host} przez API v2, potrzebny jest token. Naciśnij przycisk na liczniku P1 i kliknij Zatwierdź w ciągu 30 sekund.\n\nLub zaznacz API v1: licznik będzie wtedy odczytywany co sekundę przez lokalne API (włącz \"Lokalne API\" w aplikacji HomeWizard).",
+        "data": {
+          "use_v1": "Użyj API v1 (lokalne API) zamiast tokenu"
         }
       }
     },
@@ -676,7 +716,10 @@
       "unknown": "Nieoczekiwany błąd",
       "mqtt_server_required": "Wprowadź adres serwera MQTT.",
       "fast_longer_than_normal": "Szybki interwał nie może być dłuższy niż interwał normalny.",
-      "invalid_address": "Wprowadź prawidłowy adres IP lub nazwę hosta."
+      "invalid_address": "Wprowadź prawidłowy adres IP lub nazwę hosta.",
+      "homewizard_press_button": "Licznik P1 nie dał jeszcze tokenu: naciśnij jego przycisk i kliknij Zatwierdź w ciągu 30 sekund.",
+      "homewizard_unreachable": "Licznik P1 HomeWizard nie odpowiada pod tym adresem.",
+      "homewizard_v1_unreachable": "Licznik P1 nie odpowiada przez API v1: włącz \"Lokalne API\" w aplikacji HomeWizard."
     }
   },
   "issues": {
@@ -691,6 +734,10 @@
     "mqtt_local_disconnected": {
       "title": "Lokalny broker MQTT nie jest połączony",
       "description": "Home Assistant nie jest połączony z lokalnym serwerem MQTT {server}. Sprawdź, czy broker działa oraz czy użytkownik i hasło są poprawne. Problem zniknie po przywróceniu połączenia."
+    },
+    "zensdk_no_address": {
+      "title": "Brak znanego adresu dla {name}",
+      "description": "Chmura Zendure nie podała adresu IP dla {name}, więc integracja spróbowała utworzonej nazwy {address}, która nie odpowiada. Wprowadź adres IP urządzenia (aplikacja Zendure, informacje o urządzeniu, lub lista DHCP routera) w Konfiguruj, Adresy urządzeń. Zalecany jest stały adres DHCP. Do tego czasu urządzenie działa tylko z połączeniem ustawionym na chmurę."
     }
   }
 }

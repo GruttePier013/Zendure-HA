@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import timedelta
+from typing import Any
 
 from custom_components.zendure_ha.api import mqtt_password
 from custom_components.zendure_ha.migration import replace_entity_ids
@@ -58,3 +59,28 @@ async def test_timezone_offset_follows_home_assistant(zensdk_device, hass) -> No
     offset = zensdk_device.timezone_offset()
     assert offset in ("GMT+01:00", "GMT+02:00")
     assert timedelta  # keep the import used
+
+
+async def test_device_settings_are_config_entities_when_created_while_running(zensdk_device, monkeypatch) -> None:  # noqa: ANN001
+    """Home Assistant adds an entity eagerly: the category must be known when the constructor adds it."""
+    from homeassistant.const import EntityCategory
+
+    from custom_components.zendure_ha.select import ZendureSelect
+    from custom_components.zendure_ha.switch import ZendureSwitch
+
+    seen: dict[str, Any] = {}
+
+    def record(entities: list[Any]) -> None:
+        for entity in entities:
+            seen[entity.propertyName] = entity.entity_category
+
+    monkeypatch.setattr(ZendureSwitch, "add", staticmethod(record))
+    monkeypatch.setattr(ZendureSelect, "add", staticmethod(record))
+    zensdk_device.entityUpdate("Fanmode", 1)
+    zensdk_device.entityUpdate("lampSwitch", 0)
+    zensdk_device.entityUpdate("gridReverse", 1)
+    zensdk_device.entityUpdate("buzzerSwitch", 0)
+    assert seen["Fanmode"] is EntityCategory.CONFIG
+    assert seen["lampSwitch"] is EntityCategory.CONFIG
+    assert seen["gridReverse"] is EntityCategory.CONFIG
+    assert seen["buzzerSwitch"] is None

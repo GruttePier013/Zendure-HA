@@ -30,6 +30,14 @@ def _stub_add_entities_callback(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(cls, "add", staticmethod(_noop), raising=False)
 
 
+@pytest.fixture(autouse=True)
+def _no_mode_switch_delay(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The pause between an AC mode switch and the new limit is not needed in tests."""
+    from custom_components.zendure_ha.const import Http
+
+    monkeypatch.setattr(Http, "MODE_SWITCH_DELAY", 0)
+
+
 @pytest.fixture
 def device_definition() -> dict[str, str]:
     """A minimal device 'definition' dict as passed by the coordinator/config entry."""

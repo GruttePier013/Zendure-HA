@@ -89,8 +89,8 @@ class RoleSelector:
         now = self._clock()
         self.discharger, self._since_discharger = self._pick(self.discharger, self._since_discharger, dischargeable, True, now)
 
-        # the charger should be another device when there is one
-        candidates = [c for c in chargeable if c[0] != self.discharger] or list(chargeable)
+        # the charger is always another device: with one device there is no role split
+        candidates = [c for c in chargeable if c[0] != self.discharger]
         self.charger, self._since_charger = self._pick(self.charger, self._since_charger, candidates, False, now)
 
     def _pick(self, current: str | None, since: float, candidates: Sequence[tuple[str, int]], highest: bool, now: float) -> tuple[str | None, float]:
@@ -109,3 +109,70 @@ class RoleSelector:
     @property
     def active(self) -> bool:
         return self.margin > 0
+
+
+# ------------------------------------------------------------------------------------------------
+# changing clouds: detection of a volatile period
+# ------------------------------------------------------------------------------------------------
+
+VOLATILE_EDGE = 800  # W: largest change of the net demand within EDGE_WINDOW that is needed to count as a cloud edge
+EDGE_MIN = 300  # W: smallest edge threshold (low sun)
+EDGE_SHARE = 0.5  # the edge threshold is this share of the recent peak surplus, between EDGE_MIN and VOLATILE_EDGE
+EDGE_WINDOW = 15.0  # s
+VOLATILE_WINDOW = 600.0  # s: period in which the edges are counted
+VOLATILE_EDGES = 6  # edges in VOLATILE_WINDOW (an appliance on + off is 2 edges, a passing cloud too)
+SUN_WINDOW = 900.0  # s: period of the peak surplus
+SUN_MIN = 200  # W: below this peak surplus there is no sun to speak of: no cloud mode (evening, night)
+
+
+class Volatility:
+    """Detect a period of changing clouds from the net demand (P1 plus what the batteries do).
+
+    Clouds only matter while the sun produces more than the house uses, and a cloud can only take away
+    what the sun gives. So the size of an edge is compared with the recent peak surplus: with 900 W of
+    sun a cloud is a change of a few hundred watts, with 4500 W of sun it is much more. Without a
+    surplus (evening, night) appliances switching on and off never start the cloud mode.
+    """
+
+    def __init__(self) -> None:
+        self._samples: deque[tuple[float, int]] = deque()
+        self._edges: deque[float] = deque()
+        self._last_edge = float("-inf")
+        self._surplus: deque[tuple[float, int]] = deque()  # (t, surplus) with a falling maximum
+
+    def add(self, t: float, demand: int) -> None:
+        # peak surplus over SUN_WINDOW (monotonic deque: the front is the maximum)
+        surplus = max(0, -demand)
+        while self._surplus and self._surplus[-1][1] <= surplus:
+            self._surplus.pop()
+        self._surplus.append((t, surplus))
+        while t - self._surplus[0][0] > SUN_WINDOW:
+            self._surplus.popleft()
+
+        self._samples.append((t, demand))
+        while self._samples and t - self._samples[0][0] > EDGE_WINDOW:
+            self._samples.popleft()
+        values = [v for _, v in self._samples]
+        if self.peak_surplus >= SUN_MIN and max(values) - min(values) >= self.threshold and t - self._last_edge >= EDGE_WINDOW:
+            self._edges.append(t)
+            self._last_edge = t
+        while self._edges and t - self._edges[0] > VOLATILE_WINDOW:
+            self._edges.popleft()
+
+    @property
+    def peak_surplus(self) -> int:
+        """The largest surplus (W, PV minus house) in the last SUN_WINDOW."""
+        return self._surplus[0][1] if self._surplus else 0
+
+    @property
+    def threshold(self) -> int:
+        """The change of the net demand (W) that counts as a cloud edge now."""
+        return int(min(VOLATILE_EDGE, max(EDGE_MIN, EDGE_SHARE * self.peak_surplus)))
+
+    @property
+    def edges(self) -> int:
+        return len(self._edges)
+
+    @property
+    def active(self) -> bool:
+        return len(self._edges) >= VOLATILE_EDGES and self.peak_surplus >= SUN_MIN

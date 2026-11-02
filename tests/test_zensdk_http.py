@@ -70,6 +70,7 @@ async def test_backoff_grows_and_marks_the_device_offline(zensdk_device, fast) -
 
 
 async def test_success_resets_failures_and_clears_the_issue(zensdk_device, fast, hass) -> None:  # noqa: ANN001
+    zensdk_device.connection._attr_current_option = "zenSDK"
     zensdk_device.session = _Session([asyncio.TimeoutError()])
     for _ in range(Http.ISSUE_AFTER):
         zensdk_device._http_retry_after = 0.0
@@ -90,3 +91,54 @@ async def test_requests_are_never_parallel(zensdk_device, fast) -> None:  # noqa
     await asyncio.gather(*(zensdk_device._http("GET", "x") for _ in range(5)))
     assert session.calls == 5
     assert session.tracker["max"] == 1
+
+
+async def test_http_failures_do_not_mark_offline_while_mqtt_reports_arrive(zensdk_device, fast) -> None:  # noqa: ANN001
+    """The address can be wrong while the device still reports over the local MQTT broker: it stays online."""
+    from time import monotonic
+
+    zensdk_device.session = _Session([asyncio.TimeoutError()])
+    zensdk_device.lastseen = datetime.now()
+    zensdk_device.mqtt_last = monotonic()
+    for _ in range(Http.OFFLINE_AFTER + 1):
+        zensdk_device._http_retry_after = 0.0
+        await zensdk_device._http("GET", "properties/report")
+    assert zensdk_device.lastseen != datetime.min
+
+
+def test_zensdk_devices_are_subscribed_on_the_local_broker(zensdk_device) -> None:  # noqa: ANN001
+    from unittest.mock import MagicMock
+
+    from custom_components.zendure_ha.api import Api
+
+    zensdk_device.connection._attr_current_option = "zenSDK"
+    api = object.__new__(Api)
+    client = MagicMock()
+    Api.devices = {zensdk_device.deviceId: zensdk_device}
+    try:
+        api.mqttConnect(client, "local", None, 0, None)
+    finally:
+        Api.devices = {}
+    topics = [c.args[0] for c in client.subscribe.call_args_list]
+    assert f"/{zensdk_device.prodkey}/{zensdk_device.deviceId}/#" in topics
+
+
+async def test_guessed_name_raises_the_no_address_issue_sooner(zensdk_device, fast, hass) -> None:  # noqa: ANN001
+    zensdk_device.connection._attr_current_option = "zenSDK"
+    zensdk_device.session = _Session([asyncio.TimeoutError()])
+    assert zensdk_device.address_source == "guess"
+    for _ in range(Http.OFFLINE_AFTER):
+        zensdk_device._http_retry_after = 0.0
+        await zensdk_device._http("GET", "x")
+    issue = ir.async_get(hass).async_get_issue(DOMAIN, f"zensdk_unreachable_{zensdk_device.snNumber.lower()}")
+    assert issue is not None and issue.translation_key == "zensdk_no_address"
+
+
+async def test_no_zensdk_issue_in_cloud_mode(zensdk_device, fast, hass) -> None:  # noqa: ANN001
+    """The start-up HTTP read also runs in cloud mode; failures there must not raise a zenSDK repair issue."""
+    zensdk_device.connection._attr_current_option = "cloud"
+    zensdk_device.session = _Session([asyncio.TimeoutError()])
+    for _ in range(Http.ISSUE_AFTER + 1):
+        zensdk_device._http_retry_after = 0.0
+        await zensdk_device._http("GET", "x")
+    assert ir.async_get(hass).async_get_issue(DOMAIN, f"zensdk_unreachable_{zensdk_device.snNumber.lower()}") is None

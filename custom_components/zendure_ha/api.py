@@ -31,7 +31,6 @@ from .const import (
     CONF_WIFIPSW,
     CONF_WIFISSID,
     DOMAIN,
-    SmartMode,
 )
 from .device import ZendureDevice
 from .devices.ace1500 import ACE1500
@@ -280,9 +279,8 @@ class Api:
                     Api.mqttCloud.unsubscribe(f"iot/{device.prodkey}/{device.deviceId}/#")
         else:
             for device in self.devices.values():
-                # a device that is read over HTTP (zenSDK) does not use the MQTT topics
-                if getattr(getattr(device, "connection", None), "value", None) == SmartMode.ZENSDK:
-                    continue
+                # also zenSDK devices: they still publish their reports over MQTT (local broker), which keeps
+                # them online and up to date when the HTTP address is wrong or the ESP32 does not answer
                 client.subscribe(f"/{device.prodkey}/{device.deviceId}/#")
                 client.subscribe(f"iot/{device.prodkey}/{device.deviceId}/#")
 

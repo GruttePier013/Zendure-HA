@@ -91,6 +91,9 @@
       },
       "mqtt_local": {
         "name": "Lokales MQTT verbunden"
+      },
+      "cloud_mode": {
+        "name": "Modus wechselnde Bewölkung"
       }
     },
     "number": {
@@ -423,10 +426,31 @@
         "name": "Flash-Schreibvorgänge"
       },
       "role_discharge": {
-        "name": "Entladegerät"
+        "name": "Entladerolle"
       },
       "role_charge": {
-        "name": "Ladegerät"
+        "name": "Laderolle"
+      },
+      "devices_not_responding": {
+        "name": "Geräte, die nicht antworten"
+      },
+      "activity": {
+        "name": "Aktivität",
+        "state": {
+          "charging": "Lädt",
+          "discharging": "Entlädt",
+          "standby": "Standby",
+          "reserve": "Standby (Wolkenreserve)",
+          "not_responding": "Antwortet nicht"
+        }
+      },
+      "role": {
+        "name": "Rolle",
+        "state": {
+          "charge": "Bereit zum Laden",
+          "discharge": "Bereit zum Entladen",
+          "none": "Keine Rolle"
+        }
       }
     },
     "select": {
@@ -499,8 +523,8 @@
           "off": "Aus",
           "manual": "Manuelle Leistungsregelung",
           "smart": "Smarte Leistungsregelung",
-          "smart_discharging": "Smartes nur Entladen",
-          "smart_charging": "Smartes nur Laden",
+          "discharge": "Smartes nur Entladen",
+          "charge": "Smartes nur Laden",
           "store_solar": "Solar speichern"
         }
       },
@@ -578,16 +602,16 @@
     "step": {
       "init": {
         "title": "Zendure HA-GP013 – Einstellungen",
-        "description": "P1-Sensor: {p1meter}\nToken: {token}\nMQTT: {mqtt}\nLeistungsregelung (normal / schnell): {control}\nSlew-Rate (hoch / runter, Wartezeit Richtungswechsel): {slew}\nLebensdauer: {lifetime}\nFeste Geräteadressen: {addresses}\nMQTT-Protokollierung: {logging}, Simulation: {simulation}\n\nWähle die Einstellungen, die du ändern möchtest.",
+        "description": "P1-Sensor: {p1meter}\nToken: {token}\nMQTT: {mqtt}\nLeistungsregelung (normal / schnell): {control}\nSlew-Rate (hoch / runter, Wartezeit Richtungswechsel): {slew}\nMehrere Wechselrichter: {lifetime}\nFeste Geräteadressen: {addresses}\nMQTT-Protokollierung: {logging}, Simulation: {simulation}\n\nWähle die Einstellungen, die du ändern möchtest.",
         "menu_options": {
           "connection": "Konto / Token",
           "mqtt": "MQTT & WLAN",
           "p1_meter": "P1-Zähler",
           "power_control": "Leistungsregelung",
           "slew": "Slew-Rate & Richtungswechsel",
-          "lifetime": "Lebensdauer (Flash & Rollen)",
+          "lifetime": "Mehrere Wechselrichter (Verteilen & Rollen)",
           "device_ips": "Geräteadressen",
-          "diagnostics": "Protokollierung & Simulation",
+          "diagnostics": "Protokollierung, Simulation und Testdaten",
           "finish": "Speichern und schließen"
         }
       },
@@ -614,9 +638,13 @@
       },
       "p1_meter": {
         "title": "P1-Zähler",
-        "description": "Der Sensor (in W), der die Nettoleistung am Netzanschluss meldet.",
+        "description": "Der Sensor (in W), der die Nettoleistung am Netzanschluss meldet. Ein HomeWizard P1-Zähler kann auch direkt gelesen werden: dann erhält der Manager jede Sekunde einen neuen Wert statt etwa alle 5 Sekunden (der Home Assistant-Sensor bleibt die Rückfallebene). Adresse leer lassen, um nur den Sensor zu verwenden.",
         "data": {
-          "p1meter": "P1-Sensor für Smart Matching"
+          "p1meter": "P1-Sensor für Smart Matching",
+          "p1_homewizard": "Adresse des HomeWizard P1-Zählers (optional, jede Sekunde gelesen)"
+        },
+        "data_description": {
+          "p1_homewizard": "IP-Adresse des HomeWizard P1-Zählers. Mit einem Token wird API v2 verwendet (WebSocket, der Zähler sendet jedes Telegramm); das Token der HomeWizard-Integration wird verwendet, wenn sie eines hat."
         }
       },
       "power_control": {
@@ -629,40 +657,52 @@
           "power_start": "Mindestleistung zum Starten eines Geräts (W)",
           "power_tolerance": "Leistungstoleranz des Geräts (W)",
           "manual_interval": "Aktualisierungsintervall im manuellen Modus (s)",
-          "peak_limit": "Spitzenkappung (W, 0 = aus)"
+          "peak_limit": "Spitzenkappung (W, 0 = aus)",
+          "export_bias": "Exportreserve beim Laden bei wechselnder Bewölkung (W, 0 = aus)"
         }
       },
       "slew": {
         "title": "Slew-Rate & Richtungswechsel",
-        "description": "Begrenzt, wie schnell sich die angeforderte Leistung ändert, und läuft beim Wechsel zwischen Laden und Entladen immer über 0 W (mit kurzer Pause). Das schont Relais und Wechselrichter. Die Werte sind Standardwerte und keine Herstellerangaben. Das für Spitzen bereitstehende Gerät darf aus dem Standby schneller starten; ein Richtungswechsel nutzt immer die normale Rate.",
+        "description": "Begrenzt, wie schnell sich die angeforderte Leistung ändert, und läuft beim Wechsel zwischen Laden und Entladen immer über 0 W (mit kurzer Pause). Das schont Relais und Wechselrichter. Die Werte sind Standardwerte und keine Herstellerangaben. Das für Spitzen bereitstehende Gerät darf aus dem Standby schneller starten; ein Richtungswechsel nutzt immer die normale Rate. Ein Richtungswechsel wird nach 2 s freigegeben, sobald das Gerät 0 W meldet, sonst nach der maximalen Pause.",
         "data": {
           "slew_enabled": "Änderungsrate der Leistung begrenzen",
           "slew_up": "Maximaler Anstieg (W/s)",
           "slew_down": "Maximaler Abfall (W/s)",
-          "flip_delay": "Pause bei 0 W beim Richtungswechsel (s)",
+          "flip_delay": "Maximale Pause bei 0 W beim Richtungswechsel, ohne bestätigte 0 W (s)",
           "min_run": "Mindestlaufzeit eines gestarteten Geräts (s)",
-          "ready_rate": "Schnellerer Start des bereitstehenden Geräts (W/s)"
+          "ready_rate": "Schnellerer Anstieg: Start des bereitstehenden Geräts und Geräte, die schon in derselben Richtung laufen (W/s)"
         }
       },
       "lifetime": {
-        "title": "Lebensdauer (Flash & Rollen)",
-        "description": "Bei mehreren Geräten entlädt ein Gerät und ein anderes lädt. Eine Rolle wechselt erst zu einem anderen Gerät, wenn es so viele SoC-Punkte führt und die Rolle mindestens 5 Minuten gehalten wurde. Der sichere Zustand speichert einmalig 0 W im Flash des Geräts, damit ein neu startendes Gerät mit 0 W beginnt; er wird höchstens einmal pro Stunde geschrieben. Laden und Entladen nutzen so wenige Geräte wie nötig: ein weiteres Gerät startet erst, wenn die laufenden diesen Anteil ihres Limits tragen; die übrigen bleiben für Spitzen wie einen Wasserkocher bereit.",
+        "title": "Mehrere Wechselrichter: Verteilen, Rollen und Flash",
+        "description": "Bei mehreren Wechselrichtern nutzen Laden und Entladen so wenige Wechselrichter wie nötig (besserer Wirkungsgrad): ein weiterer startet erst, wenn die laufenden die Verteilschwelle ihres Limits tragen; darunter wird die Leistung wieder auf weniger Wechselrichter zusammengelegt. Die anderen bleiben bereit für Spitzen wie einen Wasserkocher. Ein Wechselrichter entlädt, ein anderer lädt; eine Rolle wechselt erst, wenn der andere um die Rollenwechsel-Marge im SoC vorne liegt und die Rolle mindestens 5 Minuten gehalten wurde. Der sichere Zustand speichert einmal 0 W im Flash des Geräts, sodass ein Wechselrichter nach einem Neustart mit 0 W beginnt; höchstens einmal pro Stunde.",
         "data": {
-          "role_margin": "Spielraum für Rollenwechsel (SoC %)",
-          "fill_level": "Last pro Gerät, bevor ein weiteres startet (%)",
-          "flash_safe_state": "Sicheren Zustand (0 W) im Flash des Geräts speichern"
+          "role_margin": "Rollenwechsel-Marge (SoC %)",
+          "fill_level": "Verteilschwelle (%)",
+          "flash_safe_state": "Sicheren Zustand (0 W) im Geräte-Flash speichern"
+        },
+        "data_description": {
+          "fill_level": "Last pro Wechselrichter, bevor die Leistung auf einen weiteren verteilt wird; darunter wird auf weniger zusammengelegt. 85 % bei 3 × 2400 W: 1 Wechselrichter bis etwa 1900–2000 W. Bei schnell wechselnder Bewölkung gelten 70 %."
         }
       },
       "device_ips": {
         "title": "Geräteadressen",
-        "description": "Feste IP-Adresse oder Hostname pro zenSDK-Gerät. Sie hat Vorrang vor der Adresse aus der Cloud und mDNS, nützlich über VLANs hinweg. Leer lassen für automatische Erkennung.\n\n{devices}"
+        "description": "Feste IP-Adresse oder Hostname pro zenSDK-Gerät. Sie hat Vorrang vor der Adresse aus der Cloud und mDNS, nützlich über VLANs hinweg. Leer lassen für automatische Erkennung. Steht dort GUESSED, hat die Cloud keine IP geliefert: trage die IP-Adresse ein.\n\n{devices}"
       },
       "diagnostics": {
-        "title": "Protokollierung & Simulation",
-        "description": "Debug-Optionen.",
+        "title": "Protokollierung, Simulation und Testdaten",
+        "description": "Debug-Optionen. Die P1-Aufzeichnung schreibt jeden P1-Wert (jede Sekunde bei einem direkt gelesenen HomeWizard P1-Zähler) mit der Batterieleistung nach <config>/zendure_ha/p1_<Datum>.csv, als Testdaten für die Simulation. Sie schaltet sich um Mitternacht selbst aus.",
         "data": {
           "mqttlog": "MQTT-Kommunikation protokollieren",
-          "simulation": "Simulationsmodus"
+          "simulation": "Simulationsmodus",
+          "p1_record": "P1 jede Sekunde bis Mitternacht aufzeichnen (Testdaten)"
+        }
+      },
+      "p1_token": {
+        "title": "HomeWizard P1-Zähler: Token",
+        "description": "Um den P1-Zähler unter {host} über API v2 zu lesen, wird ein Token benötigt. Drücke die Taste am P1-Zähler und klicke innerhalb von 30 Sekunden auf Absenden.\n\nOder wähle API v1: dann wird der Zähler jede Sekunde über die lokale API gelesen (\"Lokale API\" in der HomeWizard-App einschalten).",
+        "data": {
+          "use_v1": "API v1 (lokale API) statt eines Tokens verwenden"
         }
       }
     },
@@ -676,7 +716,10 @@
       "unknown": "Unerwarteter Fehler",
       "mqtt_server_required": "Gib die Adresse des MQTT-Servers ein.",
       "fast_longer_than_normal": "Das schnelle Intervall darf nicht länger als das normale Intervall sein.",
-      "invalid_address": "Gib eine gültige IP-Adresse oder einen gültigen Hostnamen ein."
+      "invalid_address": "Gib eine gültige IP-Adresse oder einen gültigen Hostnamen ein.",
+      "homewizard_press_button": "Der P1-Zähler hat noch kein Token gegeben: Taste drücken und innerhalb von 30 Sekunden auf Absenden klicken.",
+      "homewizard_unreachable": "Der HomeWizard P1-Zähler antwortet nicht unter dieser Adresse.",
+      "homewizard_v1_unreachable": "Der P1-Zähler antwortet nicht über API v1: \"Lokale API\" in der HomeWizard-App einschalten."
     }
   },
   "issues": {
@@ -691,6 +734,10 @@
     "mqtt_local_disconnected": {
       "title": "Lokaler MQTT-Broker ist nicht verbunden",
       "description": "Home Assistant ist nicht mit dem lokalen MQTT-Server {server} verbunden. Prüfe, ob der Broker läuft und Benutzer und Passwort stimmen. Die Meldung verschwindet, sobald die Verbindung wiederhergestellt ist."
+    },
+    "zensdk_no_address": {
+      "title": "Keine Adresse für {name} bekannt",
+      "description": "Die Zendure-Cloud hat keine IP-Adresse für {name} geliefert, daher hat die Integration den zusammengesetzten Namen {address} versucht, der nicht antwortet. Trage die IP-Adresse des Geräts (Zendure-App, Geräteinformationen, oder die DHCP-Liste deines Routers) unter Konfigurieren, Geräteadressen ein. Eine feste DHCP-Zuweisung wird empfohlen. Bis dahin funktioniert das Gerät nur mit der Verbindung auf Cloud."
     }
   }
 }

@@ -10,6 +10,7 @@ from pathlib import Path
 from collections.abc import Callable
 from typing import Any
 
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
@@ -39,6 +40,13 @@ _LOGGER = logging.getLogger(__name__)
 CONST_FACTOR = 2
 POWER_DEADBAND = 2  # W, smaller changes of a power sensor are not recorded
 
+
+
+# device properties that are settings: shown in the configuration section instead of the controls
+# Settings of a device: shown in the configuration section of the device page. The category is set in the
+# constructor, before the entity is added: Home Assistant adds an entity eagerly (the registry entry is written
+# during add), so a category set after the constructor is lost for entities that are created while running.
+CONFIG_KEYS = frozenset({"gridReverse", "fanSpeed", "Fanspeed", "Fanmode", "fanSwitch", "lampSwitch", "fuseGroup", "connection", "slewFactor"})
 
 class EntityAdder:
     """Stand-in for `async_add_entities` that queues entities until the platform is set up.
@@ -120,6 +128,8 @@ class EntityZendure(Entity):
         self._attr_unique_id = snakecase(f"{self.device.name.lower()}_{uniqueid}")
         self.internal_integration_suggested_object_id = self._attr_unique_id
         self._attr_translation_key = snakecase(uniqueid)
+        if uniqueid in CONFIG_KEYS:
+            self._attr_entity_category = EntityCategory.CONFIG
         device.entities[uniqueid] = self
         if domain:
             device.checkEntity.setdefault(self._attr_translation_key, domain)

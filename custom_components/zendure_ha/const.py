@@ -7,6 +7,9 @@ DOMAIN = "zendure_ha"
 
 CONF_APPTOKEN = "token"
 CONF_P1METER = "p1meter"
+CONF_P1_HOMEWIZARD = "p1_homewizard"  # address of a HomeWizard P1 meter that is read directly (1 s)
+CONF_P1_RECORD = "p1_record"  # date (YYYY-MM-DD) on which P1 is recorded every second; switches itself off at midnight
+CONF_P1_TOKEN = "p1_homewizard_token"  # API v2 token of that meter (empty: API v1 or the token of the HomeWizard integration)
 CONF_PRICE = "price"
 CONF_MQTTLOG = "mqttlog"
 CONF_MQTTLOCAL = "mqttlocal"
@@ -34,6 +37,7 @@ CONF_PEAK_LIMIT = "peak_limit"
 CONF_MANUAL_INTERVAL = "manual_interval"
 CONF_ROLE_MARGIN = "role_margin"
 CONF_FILL_LEVEL = "fill_level"
+CONF_EXPORT_BIAS = "export_bias"
 CONF_FLASH_SAFE = "flash_safe_state"
 CONF_MIN_RUN = "min_run"
 CONF_READY_RATE = "ready_rate"
@@ -79,6 +83,17 @@ class SmartMode:
 
     TIMEFAST = 2.2  # Fast update interval after significant change
     TIMEZERO = 4  # Normal update interval
+    CYCLE_TIMEOUT = 20.0  # s: a control cycle that takes longer is stopped and logged (it would block all following cycles)
+    CHARGE_DELAY_FIRST = 2  # s before charging starts after discharging/idle (first time within CHARGE_DELAY_WINDOW)
+    CHARGE_DELAY = 60  # s before charging starts again when it already started within CHARGE_DELAY_WINDOW (1.4.4 "hysteria")
+    CHARGE_DELAY_WINDOW = 300  # s
+    CLOUD_CHARGE_DELAY = 10  # s: CHARGE_DELAY during changing clouds (the sun is back within a minute)
+    CLOUD_POWER_START = 150  # W: POWER_START during changing clouds (a short shortage does not start a device)
+    CLOUD_MARGIN_DISCHARGE = False  # the export margin only while charging: while discharging it would export battery energy
+    CLOUD_MARGIN_SHARE = 1.0  # the export margin in cloud mode is at most this share of the recent peak surplus
+    FAST_DEADBAND = 50  # W: smaller P1 differences are left to the normal control cycle
+    FAST_INTERVAL = 1.0  # s: at least this long between two fast adjustments of one device (ESP32 load)
+    FAST_MIN = 50  # W: the fast adjustment never takes a running device below this (stopping is for the cycle)
     RAMP_INTERVAL = 1.0  # s between two steps while a device is ramping (one step = at most 1 s of slew rate)
     MANUAL_INTERVAL = 15  # Update interval in manual mode: a fixed power does not need to follow the P1 meter
     OFF_INTERVAL = 60  # Update interval when the manager is off (only the sensors are refreshed)
@@ -94,11 +109,15 @@ class SmartMode:
     HEMSOFF_TIMEOUT = 60  # Seconds before HEMS state is set to OFF if no updates are received
 
     POWER_START = 50  # Minimum Power (W) for starting a device
-    FILL_LEVEL = 70  # % of its limit a device carries before another device is started (the others stay ready)
+    FILL_LEVEL = 85  # % of its limit a device carries before another device is started (2400 W: above ~2040 W)
     FILL_HYSTERESIS = 5  # % points below the fill level before a surplus charging device is released
-    CROSSFLOW_WARN = 5  # cycles with one device charging and another discharging before a warning is logged
+    CROSSFLOW_WARN = 15  # seconds with one device charging and another discharging before a warning is logged
     RELEASE_HOLD = 30  # seconds a released device stays in standby (unless it is needed), against reporting lag
     RELEASE_LOOKBACK = 180  # s: a device is only released when the others can carry the highest load of this period
+    CLOUD_FILL_LEVEL = 70  # fill level in cloud mode: share the load sooner, so a returning sun or a cloud is followed faster
+    RESERVE_RELEASE = 95  # % of the capacity of the other chargers above which the cloud reserve charges too
+    RESERVE_DELAY = 10  # s the surplus must stay above RESERVE_RELEASE before the cloud reserve charges too
+    RESERVE_KEEP = 85  # % below which the cloud reserve is kept out of charging again (hysteresis)
     CONSOLIDATE_DELAY = 30  # seconds the load must stay low before a surplus charging device is released
     POWER_TOLERANCE = 5  # Device-level power tolerance (W) before updating
 
@@ -122,6 +141,7 @@ class Http:
     BACKOFF_MAX = 60  # seconds
     ISSUE_AFTER = 5  # consecutive failures before a repair issue is raised
     POLL_ACTIVE = 2.0  # seconds between two reports while the device is active
+    MODE_SWITCH_DELAY = 1.0  # s between switching the AC mode (at 0 W) and sending the new limit
     POLL_IDLE = 30.0  # seconds between two reports while the device is completely idle
 
 
@@ -130,7 +150,8 @@ CONTROL_DEFAULTS = {
     CONF_PEAK_LIMIT: 0,
     CONF_MANUAL_INTERVAL: 15,
     CONF_ROLE_MARGIN: 10,
-    CONF_FILL_LEVEL: 70,
+    CONF_FILL_LEVEL: 85,
+    CONF_EXPORT_BIAS: 100,
     CONF_TIMEZERO: 4,
     CONF_TIMEFAST: 2.2,
     CONF_P1_STDDEV_MIN: 15,

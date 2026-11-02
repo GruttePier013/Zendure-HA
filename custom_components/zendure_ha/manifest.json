@@ -2,7 +2,7 @@
   "domain": "zendure_ha",
   "name": "Zendure HA-GP013",
   "codeowners": [
-    "@fireson"
+    "@GruttePier013"
   ],
   "config_flow": true,
   "dependencies": [
@@ -11,13 +11,13 @@
     "recorder",
     "zeroconf"
   ],
-  "documentation": "https://github.com/OWNER/Zendure-HA-GP013",
+  "documentation": "https://github.com/GruttePier013/Zendure-HA-GP013",
   "iot_class": "local_push",
-  "issue_tracker": "https://github.com/OWNER/Zendure-HA-GP013/issues",
+  "issue_tracker": "https://github.com/GruttePier013/Zendure-HA-GP013/issues",
   "requirements": [
     "bleak-retry-connector>=3.9.0",
     "paho-mqtt>=2.1.0"
   ],
   "single_config_entry": true,
-  "version": "1.0.0"
+  "version": "1.5.6"
 }

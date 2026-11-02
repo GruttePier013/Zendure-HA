@@ -52,17 +52,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ZendureConfigEntry) -> b
     entry.async_on_unload(manager.async_shutdown_manager)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     await manager.async_config_entry_first_refresh()
-    entry.async_on_unload(entry.add_update_listener(update_listener))
+    # no update listener: the options flow applies its settings itself and schedules a reload only when needed
+    # (Home Assistant 2026.12 no longer allows an update listener together with a reload requested by the flow)
     return True
 
 
-async def update_listener(_hass: HomeAssistant, entry: ZendureConfigEntry) -> None:
-    """Handle options update."""
-    _LOGGER.debug("Updating Zendure config entry: %s", entry.entry_id)
+def apply_entry_settings(entry: ZendureConfigEntry) -> None:
+    """Apply the settings that do not need a reload to the running integration."""
+    _LOGGER.debug("Applying Zendure settings: %s", entry.entry_id)
     Api.mqttLogging = entry.data.get(CONF_MQTTLOG, False)
     ZendureManager.simulation = entry.data.get(CONF_SIM, False)
-    entry.runtime_data.update_p1meter(entry.data.get(CONF_P1METER, "sensor.power_actual"))
-    entry.runtime_data.apply_settings(entry.data)
+    if (manager := getattr(entry, "runtime_data", None)) is None:
+        return
+    manager.update_p1meter(entry.data.get(CONF_P1METER, "sensor.power_actual"), entry.data)
+    manager.apply_settings(entry.data)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ZendureConfigEntry) -> bool:
