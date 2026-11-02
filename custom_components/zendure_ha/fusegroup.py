@@ -17,15 +17,26 @@ class FuseGroup:
         self.name: str = name
         self.maxpower = maxpower
         self.minpower = minpower
-        self.initPower = True
+        # separate flags: a group with a charging and a discharging device in one cycle needs both limits
+        self.initCharge = True
+        self.initDischarge = True
         self.devices: list[ZendureDevice] = devices if devices is not None else []
         for d in self.devices:
             d.fuseGrp = self
 
+    @property
+    def initPower(self) -> bool:
+        return self.initCharge or self.initDischarge
+
+    @initPower.setter
+    def initPower(self, value: bool) -> None:
+        """Mark the limits as outdated (True) at the start of an update cycle."""
+        self.initCharge = self.initDischarge = value
+
     def charge_limit(self, d: ZendureDevice) -> int:
-        """Return the limit discharge power for a device."""
-        if self.initPower:
-            self.initPower = False
+        """Return the limit charge power for a device."""
+        if self.initCharge:
+            self.initCharge = False
             if len(self.devices) == 1:
                 d.pwr_max = max(self.minpower, d.charge_limit)
             else:
@@ -49,8 +60,8 @@ class FuseGroup:
 
     def discharge_limit(self, d: ZendureDevice) -> int:
         """Return the limit discharge power for a device."""
-        if self.initPower:
-            self.initPower = False
+        if self.initDischarge:
+            self.initDischarge = False
             if len(self.devices) == 1:
                 d.pwr_max = min(self.maxpower, d.discharge_limit)
             else:

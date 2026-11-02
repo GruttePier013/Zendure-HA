@@ -10,16 +10,16 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .entity import EntityDevice, EntityZendure
+from .entity import EntityAdder, EntityDevice, EntityZendure
 
 
 async def async_setup_entry(_hass: HomeAssistant, _config_entry: ConfigEntry, async_add_entities: AddEntitiesCallback) -> None:
     """Set up the Zendure button."""
-    ZendureButton.add = async_add_entities
+    ZendureButton.add.attach(async_add_entities)
 
 
 class ZendureButton(EntityZendure, ButtonEntity):
-    add: AddEntitiesCallback
+    add: AddEntitiesCallback | EntityAdder = EntityAdder()
 
     def __init__(self, device: EntityDevice, uniqueid: str, onpress: Callable) -> None:
         """Initialize a button."""

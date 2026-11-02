@@ -1,4 +1,4 @@
-"""Zendure Integration api."""
+"""Zendure HA-GP013 api."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from collections.abc import Callable
 from datetime import datetime
 from typing import Any, Mapping
 
+from aiohttp import ClientTimeout
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.storage import Store
@@ -30,6 +31,7 @@ from .const import (
     CONF_WIFIPSW,
     CONF_WIFISSID,
     DOMAIN,
+    SmartMode,
 )
 from .device import ZendureDevice
 from .devices.ace1500 import ACE1500
@@ -52,6 +54,17 @@ _LOGGER = logging.getLogger(__name__)
 
 ZENDURE_MANAGER_STORAGE_VERSION = 1
 ZENDURE_DEVICES = "devices"
+API_TIMEOUT = ClientTimeout(total=20)  # the default of aiohttp is 5 minutes, which would block the setup
+
+
+def mqtt_password(device_id: str) -> str:
+    """MQTT password of a device.
+
+    This is not a secret of this integration: the firmware of the device derives the same password
+    from its own id for every broker it connects to (cloud and local), so it cannot be changed here.
+    The HA user that is created for local MQTT is limited to the local network.
+    """
+    return hashlib.md5(device_id.encode()).hexdigest().upper()[8:24]  # noqa: S324
 
 
 class ApiError(Exception):
@@ -103,6 +116,7 @@ class Api:
 
     def Init(self, data: Mapping[str, Any], mqtt: Mapping[str, Any]) -> None:
         """Initialize Zendure Api."""
+        Api.stop_clients()  # a reload must not leave the threads of the previous clients running
         Api.mqttLogging = data.get(CONF_MQTTLOG, False)
         Api.mqttCloud.__init__(mqtt_enums.CallbackAPIVersion.VERSION2, mqtt["clientId"], False, "cloud", mqtt_enums.MQTTProtocolVersion.MQTTv31)
         url = mqtt["url"]
@@ -122,6 +136,25 @@ class Api:
             clientId = Api.localUser + str(secrets.randbelow(10000))
             self.mqttLocal.__init__(mqtt_enums.CallbackAPIVersion.VERSION2, clientId, True, "local", mqtt_enums.MQTTProtocolVersion.MQTTv31)
             self.mqttInit(self.mqttLocal, Api.localServer, Api.localPort, Api.localUser, Api.localPassword)
+
+    @staticmethod
+    def stop_clients() -> None:
+        """Stop the MQTT clients and their threads (blocking, call from the executor when the loop is running)."""
+        clients = [Api.mqttCloud, Api.mqttLocal] + [d.zendure for d in Api.devices.values() if d.zendure is not None]
+        for client in clients:
+            try:
+                client.disconnect()
+                client.loop_stop()
+            except Exception as err:  # a client that was never started
+                _LOGGER.debug("Stopping an MQTT client: %s", err)
+
+    @staticmethod
+    async def stop(hass: HomeAssistant) -> None:
+        """Unload: stop all MQTT clients without blocking the event loop and forget the devices."""
+        await hass.async_add_executor_job(Api.stop_clients)
+        for device in Api.devices.values():
+            device.zendure = None
+        Api.devices.clear()
 
     @staticmethod
     async def Connect(hass: HomeAssistant, data: dict[str, Any], reload: bool) -> dict[str, Any] | None:
@@ -145,8 +178,10 @@ class Api:
                 if (storage := await store.async_load()) and isinstance(storage, dict):
                     devices = storage.get(ZENDURE_DEVICES, {})
             else:
-                # Save configuration to storage
-                await store.async_save({ZENDURE_DEVICES: devices})
+                # Save configuration to storage, but only when it changed: every save is a write to the disk of the host
+                previous = await store.async_load()
+                if not isinstance(previous, dict) or previous.get(ZENDURE_DEVICES) != devices:
+                    await store.async_save({ZENDURE_DEVICES: devices})
 
         return devices
 
@@ -197,8 +232,10 @@ class Api:
                 "sign": sign,
             }
 
-            result = await session.post(url=f"{api_url}/api/ha/deviceList", json=body, headers=headers)
-            data = await result.json()
+            async with session.post(url=f"{api_url}/api/ha/deviceList", json=body, headers=headers, timeout=API_TIMEOUT) as result:
+                if result.status >= 500:  # noqa: PLR2004
+                    raise ApiError("cannot_connect", f"HTTP {result.status}")
+                data = await result.json(content_type=None)
         except ApiError:
             raise
         except Exception as e:
@@ -228,7 +265,7 @@ class Api:
             client.on_message = self.mqttMsgCloud if client == self.mqttCloud else self.mqttMsgLocal if client == self.mqttLocal else self.mqttMsgDevice
             client.suppress_exceptions = True
             client.username_pw_set(user, psw)
-            client.connect(srv, int(port))
+            client.connect_async(srv, int(port))  # does not block the event loop; the loop thread connects and reconnects
             client.loop_start()
         except Exception as e:
             _LOGGER.error("Unable to connect to Zendure %s!", e)
@@ -243,6 +280,9 @@ class Api:
                     Api.mqttCloud.unsubscribe(f"iot/{device.prodkey}/{device.deviceId}/#")
         else:
             for device in self.devices.values():
+                # a device that is read over HTTP (zenSDK) does not use the MQTT topics
+                if getattr(getattr(device, "connection", None), "value", None) == SmartMode.ZENSDK:
+                    continue
                 client.subscribe(f"/{device.prodkey}/{device.deviceId}/#")
                 client.subscribe(f"iot/{device.prodkey}/{device.deviceId}/#")
 
@@ -320,7 +360,7 @@ class Api:
                         device.setStatus()
 
                     if device.zendure is None:
-                        psw = hashlib.md5(device.deviceId.encode()).hexdigest().upper()[8:24]  # noqa: S324
+                        psw = mqtt_password(device.deviceId)
                         device.zendure = mqtt_client.Client(mqtt_enums.CallbackAPIVersion.VERSION2, device.deviceId, False, "zendure")
                         self.mqttInit(device.zendure, Api.cloudServer, Api.cloudPort, device.deviceId, psw)
 

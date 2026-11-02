@@ -7,11 +7,17 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
 
 from .api import Api
+from .binary_sensor import ZendureBinarySensor
+from .button import ZendureButton
 from .const import CONF_MQTTLOG, CONF_P1METER, CONF_SIM
 from .device import ZendureDevice
 from .entity import EntityDevice
 from .manager import ZendureConfigEntry, ZendureManager
 from .migration import Migration
+from .number import ZendureNumber
+from .select import ZendureSelect
+from .sensor import ZendureSensor
+from .switch import ZendureSwitch
 
 PLATFORMS: list[Platform] = [Platform.BINARY_SENSOR, Platform.BUTTON, Platform.NUMBER, Platform.SELECT, Platform.SENSOR, Platform.SWITCH]
 
@@ -28,12 +34,23 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ZendureConfigEntry) ->
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ZendureConfigEntry) -> bool:
-    """Set up Zendure as config entry."""
-    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    """Set up Zendure as config entry.
+
+    The manager is loaded first: when the Zendure API is not reachable ConfigEntryNotReady is raised
+    before anything was set up, and Home Assistant retries later. Entities created by the manager wait
+    in a queue (EntityAdder) until the platforms are forwarded.
+    """
     await EntityDevice.async_load_translations(hass)
     manager = ZendureManager(hass, entry)
-    await manager.loadDevices()
+    try:
+        await manager.loadDevices()
+    except BaseException:
+        await manager.async_shutdown_manager()
+        await Api.stop(hass)
+        raise
     entry.runtime_data = manager
+    entry.async_on_unload(manager.async_shutdown_manager)
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     await manager.async_config_entry_first_refresh()
     entry.async_on_unload(entry.add_update_listener(update_listener))
     return True
@@ -45,6 +62,7 @@ async def update_listener(_hass: HomeAssistant, entry: ZendureConfigEntry) -> No
     Api.mqttLogging = entry.data.get(CONF_MQTTLOG, False)
     ZendureManager.simulation = entry.data.get(CONF_SIM, False)
     entry.runtime_data.update_p1meter(entry.data.get(CONF_P1METER, "sensor.power_actual"))
+    entry.runtime_data.apply_settings(entry.data)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ZendureConfigEntry) -> bool:
@@ -53,15 +71,13 @@ async def async_unload_entry(hass: HomeAssistant, entry: ZendureConfigEntry) -> 
     result = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if result:
         manager = entry.runtime_data
-        if Api.mqttCloud.is_connected():
-            Api.mqttCloud.disconnect()
-        if Api.mqttLocal.is_connected():
-            Api.mqttLocal.disconnect()
-        for c in Api.devices.values():
-            if c.zendure is not None and c.zendure.is_connected():
-                c.zendure.disconnect()
-            c.zendure = None
+        await manager.async_shutdown_manager()
+        await Api.stop(hass)  # stops the MQTT threads and forgets the devices
+        for platform_class in (ZendureBinarySensor, ZendureButton, ZendureNumber, ZendureSelect, ZendureSensor, ZendureSwitch):
+            if hasattr(platform_class.add, "detach"):
+                platform_class.add.detach()
         manager.update_p1meter(None)
+        manager.apply_settings({})  # restore the default control constants
         manager.fuseGroups.clear()
         manager.devices.clear()
     return result

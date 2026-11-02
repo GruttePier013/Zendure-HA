@@ -1,4 +1,4 @@
-"""Interfaces with the Zendure Integration number."""
+"""Interfaces with the Zendure HA-GP013 number."""
 
 import asyncio
 import logging
@@ -12,18 +12,18 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.template import Template
 
-from .entity import EntityDevice, EntityZendure
+from .entity import EntityAdder, EntityDevice, EntityZendure
 
 _LOGGER = logging.getLogger(__name__)
 
 
 async def async_setup_entry(_hass: HomeAssistant, _config_entry: ConfigEntry, async_add_entities: AddEntitiesCallback) -> None:
     """Set up the Zendure number."""
-    ZendureNumber.add = async_add_entities
+    ZendureNumber.add.attach(async_add_entities)
 
 
 class ZendureNumber(EntityZendure, NumberEntity):
-    add: AddEntitiesCallback
+    add: AddEntitiesCallback | EntityAdder = EntityAdder()
 
     def __init__(
         self,

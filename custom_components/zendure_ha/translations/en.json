@@ -49,19 +49,6 @@
       }
     }
   },
-  "options": {
-    "step": {
-      "init": {
-        "data": {
-          "p1meter": "P1 Sensor for smart matching",
-          "mqttlog": "Log MQTT communication",
-          "auto_mqtt_user": "Automatically manage MQTT users"
-        },
-        "description": "Amend your options.",
-        "title": "Zendure Integration Options"
-      }
-    }
-  },
   "entity": {
     "button": {
       "mqtt_reset": {
@@ -95,6 +82,15 @@
       },
       "hems_state": {
         "name": "HEMS Active"
+      },
+      "slew_active": {
+        "name": "Ramping (slew limited)"
+      },
+      "mqtt_cloud": {
+        "name": "Cloud MQTT connected"
+      },
+      "mqtt_local": {
+        "name": "Local MQTT connected"
       }
     },
     "number": {
@@ -112,6 +108,9 @@
       },
       "soc_set": {
         "name": "Target SoC"
+      },
+      "slew_factor": {
+        "name": "Slew rate factor"
       }
     },
     "sensor": {
@@ -371,6 +370,63 @@
       },
       "delta_voltage": {
         "name": "Delta Voltage"
+      },
+      "last_message": {
+        "name": "Last message"
+      },
+      "command_power": {
+        "name": "Commanded power"
+      },
+      "command_count": {
+        "name": "Power commands sent"
+      },
+      "http_errors": {
+        "name": "HTTP errors"
+      },
+      "ip_address": {
+        "name": "IP address"
+      },
+      "cycle_duration": {
+        "name": "Control cycle duration"
+      },
+      "cycle_interval": {
+        "name": "Control cycle interval"
+      },
+      "cycle_count": {
+        "name": "Control cycles"
+      },
+      "last_cycle": {
+        "name": "Last control cycle"
+      },
+      "p1_value": {
+        "name": "P1 value"
+      },
+      "dispatch_setpoint": {
+        "name": "Dispatch setpoint"
+      },
+      "devices_online": {
+        "name": "Devices online"
+      },
+      "devices_charging": {
+        "name": "Devices charging"
+      },
+      "devices_discharging": {
+        "name": "Devices discharging"
+      },
+      "devices_idle": {
+        "name": "Devices idle"
+      },
+      "devices_ramping": {
+        "name": "Devices ramping"
+      },
+      "flash_writes": {
+        "name": "Flash writes"
+      },
+      "role_discharge": {
+        "name": "Discharge device"
+      },
+      "role_charge": {
+        "name": "Charge device"
       }
     },
     "select": {
@@ -516,6 +572,125 @@
     },
     "no_user_password": {
       "message": "Username or password not provided."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Zendure HA-GP013 settings",
+        "description": "P1 sensor: {p1meter}\nToken: {token}\nMQTT: {mqtt}\nPower control (normal / fast): {control}\nSlew rate (up / down, direction change delay): {slew}\nLifetime: {lifetime}\nFixed device addresses: {addresses}\nMQTT logging: {logging}, simulation: {simulation}\n\nChoose the settings you want to change.",
+        "menu_options": {
+          "connection": "Account / token",
+          "mqtt": "MQTT & Wi-Fi",
+          "p1_meter": "P1 meter",
+          "power_control": "Power control",
+          "slew": "Slew rate & direction change",
+          "lifetime": "Lifetime (flash & roles)",
+          "device_ips": "Device addresses",
+          "diagnostics": "Logging & simulation",
+          "finish": "Save and close"
+        }
+      },
+      "connection": {
+        "title": "Account / token",
+        "description": "Enter the Zendure token again. It is validated against the Zendure API before it is saved.{detail}",
+        "data": {
+          "token": "Zendure Token"
+        }
+      },
+      "mqtt": {
+        "title": "MQTT & Wi-Fi",
+        "description": "Cloud or local MQTT. Leave the password fields empty to keep the stored passwords.{detail}",
+        "data": {
+          "mqttlocal": "Use local MQTT",
+          "mqttserver": "MQTT Server",
+          "mqttport": "MQTT Port",
+          "mqttuser": "MQTT User",
+          "mqttpsw": "MQTT Password",
+          "auto_mqtt_user": "Automatically manage MQTT users",
+          "wifissid": "Wifi SSID",
+          "wifipsw": "Wifi Password"
+        }
+      },
+      "p1_meter": {
+        "title": "P1 meter",
+        "description": "The sensor (in W) that reports the net power at the grid connection.",
+        "data": {
+          "p1meter": "P1 Sensor for smart matching"
+        }
+      },
+      "power_control": {
+        "title": "Power control",
+        "description": "How fast and how sensitive the manager follows the P1 meter. Change with care: a shorter interval means more commands to the devices. The P1 meter itself is always followed quickly; the manual interval only applies to manual mode.",
+        "data": {
+          "time_zero": "Normal update interval (s)",
+          "time_fast": "Fast update interval (s)",
+          "p1_stddev_min": "Minimum P1 change (W)",
+          "power_start": "Minimum power to start a device (W)",
+          "power_tolerance": "Device power tolerance (W)",
+          "manual_interval": "Update interval in manual mode (s)",
+          "peak_limit": "Peak shaving limit (W, 0 = off)"
+        }
+      },
+      "slew": {
+        "title": "Slew rate & direction change",
+        "description": "Limits how fast the commanded power changes, and always passes through 0 W (with a short pause) when switching between charging and discharging. This protects relays and inverter. Values are defaults and not firmware specifications. The device that is kept ready for peaks may start faster from standby; direction changes always use the normal rate.",
+        "data": {
+          "slew_enabled": "Limit the power change rate",
+          "slew_up": "Maximum increase (W/s)",
+          "slew_down": "Maximum decrease (W/s)",
+          "flip_delay": "Pause at 0 W when changing direction (s)",
+          "min_run": "Minimum run time of a started device (s)",
+          "ready_rate": "Faster start of the device kept ready (W/s)"
+        }
+      },
+      "lifetime": {
+        "title": "Lifetime (flash & roles)",
+        "description": "With several devices, one device discharges and another one charges. A role only moves to another device when it leads by this many SoC points and the role was held for at least 5 minutes. The safe state stores 0 W once in the device flash, so a device that reboots starts at 0 W; it is written at most once per hour. Charging and discharging use as few devices as needed: another device only starts when the running ones carry this share of their limit, the others stay ready for peaks such as a kettle.",
+        "data": {
+          "role_margin": "Role switch margin (SoC %)",
+          "fill_level": "Load per device before another one starts (%)",
+          "flash_safe_state": "Store the safe state (0 W) in device flash"
+        }
+      },
+      "device_ips": {
+        "title": "Device addresses",
+        "description": "Fixed IP address or hostname per zenSDK device. It overrides the address from the cloud and from mDNS, which is useful across VLANs. Leave empty to detect it automatically.\n\n{devices}"
+      },
+      "diagnostics": {
+        "title": "Logging & simulation",
+        "description": "Debug options.",
+        "data": {
+          "mqttlog": "Log MQTT communication",
+          "simulation": "Simulation mode"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not reach the Zendure API. Check your internet connection and try again.",
+      "malformed_token": "The token is not valid. Copy the Home Assistant token again from the Zendure app (Settings, Developer).",
+      "api_rejected": "Zendure rejected the request: {detail}",
+      "no_devices": "Token accepted, but no devices were found on this account. Make sure you use the Zendure account the device is registered to, and the correct region.",
+      "no_mqtt": "Token accepted, but no MQTT server was returned. Enable local or cloud MQTT for this account in the Zendure app.",
+      "invalid_auth": "Invalid authentication",
+      "unknown": "Unexpected error",
+      "mqtt_server_required": "Enter the address of the MQTT server.",
+      "fast_longer_than_normal": "The fast interval cannot be longer than the normal interval.",
+      "invalid_address": "Enter a valid IP address or hostname."
+    }
+  },
+  "issues": {
+    "zensdk_unreachable": {
+      "title": "{name} does not respond",
+      "description": "The Zendure device {name} ({address}) did not answer repeated local zenSDK requests. Check the power and Wi-Fi of the device, its IP address (Configure, Device addresses) and the network between Home Assistant and the device. The issue disappears when the device answers again."
+    },
+    "mqtt_cloud_disconnected": {
+      "title": "Zendure cloud MQTT is not connected",
+      "description": "Home Assistant is not connected to the Zendure cloud MQTT server {server}. Devices that depend on it cannot be controlled. Check your internet connection and the token. The issue disappears when the connection is restored."
+    },
+    "mqtt_local_disconnected": {
+      "title": "Local MQTT broker is not connected",
+      "description": "Home Assistant is not connected to the local MQTT server {server}. Check that the broker is running and that the user and password are correct. The issue disappears when the connection is restored."
     }
   }
 }

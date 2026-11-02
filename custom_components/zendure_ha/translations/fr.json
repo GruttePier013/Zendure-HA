@@ -17,8 +17,6 @@
       "user": {
         "data": {
           "token": "Clé cloud d'autorisation Zendure",
-          "username": "Nom d'utilisateur Zendure",
-          "password": "Mot de passe Zendure",
           "p1meter": "Capteur P1 pour le couplage intelligent",
           "mqttlog": "Journaliser la communication MQTT",
           "mqttlocal": "Utiliser MQTT local",
@@ -41,8 +39,6 @@
       "reconfigure": {
         "data": {
           "token": "Clé cloud d'autorisation Zendure",
-          "username": "Nom d'utilisateur Zendure",
-          "password": "Mot de passe Zendure",
           "p1meter": "Capteur P1 pour le couplage intelligent",
           "mqttlog": "Journaliser la communication MQTT",
           "mqttlocal": "Utiliser MQTT local",
@@ -50,20 +46,6 @@
           "wifissid": "SSID Wi-Fi",
           "wifipsw": "Mot de passe Wi-Fi"
         }
-      }
-    }
-  },
-  "options": {
-    "step": {
-      "init": {
-        "data": {
-          "scan_interval": "Intervalle d'analyse (secondes)",
-          "p1meter": "Capteur P1 pour le couplage intelligent",
-          "mqttlog": "Journaliser communication MQTT",
-          "auto_mqtt_user": "Gérer automatiquement les utilisateurs MQTT"
-        },
-        "description": "Modifiez vos options.",
-        "title": "Options de l'intégration Zendure"
       }
     }
   },
@@ -85,6 +67,30 @@
       },
       "rest_state": {
         "name": "mode d'économie d'énergie"
+      },
+      "reverse_state": {
+        "name": "État du flux inverse"
+      },
+      "local_state": {
+        "name": "Connexion locale"
+      },
+      "ct_off": {
+        "name": "CT déconnecté"
+      },
+      "low_temperature": {
+        "name": "Basse température"
+      },
+      "hems_state": {
+        "name": "HEMS actif"
+      },
+      "slew_active": {
+        "name": "Rampe en cours (limitée par le slew)"
+      },
+      "mqtt_cloud": {
+        "name": "MQTT cloud connecté"
+      },
+      "mqtt_local": {
+        "name": "MQTT local connecté"
       }
     },
     "number": {
@@ -102,6 +108,9 @@
       },
       "soc_set": {
         "name": "SOC maximum"
+      },
+      "slew_factor": {
+        "name": "Facteur de slew rate"
       }
     },
     "sensor": {
@@ -110,6 +119,9 @@
       },
       "available_kwh": {
         "name": "Énergie disponible"
+      },
+      "total_kwh": {
+        "name": "Capacité totale des batteries"
       },
       "auto_model": {
         "name": "Programme de batterie",
@@ -134,6 +146,18 @@
       "aggr_solar": {
         "name": "Total solaire"
       },
+      "aggr_grid_input_power": {
+        "name": "Énergie réseau totale"
+      },
+      "aggr_grid_off_power": {
+        "name": "Énergie hors réseau totale"
+      },
+      "grid_input_power": {
+        "name": "Puissance d'entrée réseau"
+      },
+      "grid_off_power": {
+        "name": "Puissance hors réseau"
+      },
       "plug_state": {
         "name": "Multiprise hors réseau",
         "state": {
@@ -153,14 +177,22 @@
           "12": "Connecté (zenSDK)"
         }
       },
-      "so_h": {
-        "name": "État de santé"
+      "soh": {
+        "name": "SoH"
       },
       "soc_status": {
         "name": "État du SOC",
         "state": {
           "0": "Actif",
           "1": "Auto-calibration"
+        }
+      },
+      "soc_limit": {
+        "name": "État de la limite SoC",
+        "state": {
+          "0": "Normal",
+          "1": "Limitation",
+          "2": "Plein"
         }
       },
       "hub_state": {
@@ -317,6 +349,12 @@
       "grid_power": {
         "name": "Puissance du réseau électrique"
       },
+      "next_calibration": {
+        "name": "Prochain calibrage"
+      },
+      "switch_count": {
+        "name": "Nombre de commutations"
+      },
       "pv_brand": {
         "name": "Marque de l'onduleur",
         "state": {
@@ -332,6 +370,63 @@
       },
       "delta_voltage": {
         "name": "Delta tension"
+      },
+      "last_message": {
+        "name": "Dernier message"
+      },
+      "command_power": {
+        "name": "Puissance commandée"
+      },
+      "command_count": {
+        "name": "Commandes de puissance envoyées"
+      },
+      "http_errors": {
+        "name": "Erreurs HTTP"
+      },
+      "ip_address": {
+        "name": "Adresse IP"
+      },
+      "cycle_duration": {
+        "name": "Durée du cycle de régulation"
+      },
+      "cycle_interval": {
+        "name": "Intervalle du cycle de régulation"
+      },
+      "cycle_count": {
+        "name": "Cycles de régulation"
+      },
+      "last_cycle": {
+        "name": "Dernier cycle de régulation"
+      },
+      "p1_value": {
+        "name": "Valeur P1"
+      },
+      "dispatch_setpoint": {
+        "name": "Consigne de répartition"
+      },
+      "devices_online": {
+        "name": "Appareils en ligne"
+      },
+      "devices_charging": {
+        "name": "Appareils en charge"
+      },
+      "devices_discharging": {
+        "name": "Appareils en décharge"
+      },
+      "devices_idle": {
+        "name": "Appareils au repos"
+      },
+      "devices_ramping": {
+        "name": "Appareils en rampe"
+      },
+      "flash_writes": {
+        "name": "Écritures flash"
+      },
+      "role_discharge": {
+        "name": "Appareil de décharge"
+      },
+      "role_charge": {
+        "name": "Appareil de charge"
       }
     },
     "select": {
@@ -433,6 +528,14 @@
           "forbidden": "Interdit"
         }
       },
+      "fan_speed": {
+        "name": "Vitesse du ventilateur",
+        "state": {
+          "auto": "Auto",
+          "normal": "Normal",
+          "fast": "Rapide"
+        }
+      },
       "fanspeed": {
         "name": "Ventilateur vitesse",
         "state": {
@@ -455,6 +558,9 @@
       "auto_recover": {
         "name": "Reset mode dérivation ( bypass )"
       },
+      "fan_switch": {
+        "name": "Ventilateur"
+      },
       "fanmode": {
         "name": "Ventilateur intelligent"
       }
@@ -466,6 +572,125 @@
     },
     "no_user_password": {
       "message": "Nom d'utilisateur ou mot de passe manquant."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Paramètres Zendure HA-GP013",
+        "description": "Capteur P1 : {p1meter}\nJeton : {token}\nMQTT : {mqtt}\nRégulation de puissance (normale / rapide) : {control}\nSlew rate (montée / descente, délai de changement de sens) : {slew}\nDurée de vie : {lifetime}\nAdresses fixes des appareils : {addresses}\nJournal MQTT : {logging}, simulation : {simulation}\n\nChoisissez les paramètres à modifier.",
+        "menu_options": {
+          "connection": "Compte / jeton",
+          "mqtt": "MQTT et Wi-Fi",
+          "p1_meter": "Compteur P1",
+          "power_control": "Régulation de puissance",
+          "slew": "Slew rate et changement de sens",
+          "lifetime": "Durée de vie (flash et rôles)",
+          "device_ips": "Adresses des appareils",
+          "diagnostics": "Journalisation et simulation",
+          "finish": "Enregistrer et fermer"
+        }
+      },
+      "connection": {
+        "title": "Compte / jeton",
+        "description": "Saisissez à nouveau le jeton Zendure. Il est vérifié auprès de l'API Zendure avant d'être enregistré.{detail}",
+        "data": {
+          "token": "Jeton Zendure"
+        }
+      },
+      "mqtt": {
+        "title": "MQTT et Wi-Fi",
+        "description": "MQTT cloud ou local. Laissez les champs de mot de passe vides pour conserver les mots de passe enregistrés.{detail}",
+        "data": {
+          "mqttlocal": "Utiliser le MQTT local",
+          "mqttserver": "Serveur MQTT",
+          "mqttport": "Port MQTT",
+          "mqttuser": "Utilisateur MQTT",
+          "mqttpsw": "Mot de passe MQTT",
+          "auto_mqtt_user": "Gérer automatiquement les utilisateurs MQTT",
+          "wifissid": "SSID Wi-Fi",
+          "wifipsw": "Mot de passe Wi-Fi"
+        }
+      },
+      "p1_meter": {
+        "title": "Compteur P1",
+        "description": "Le capteur (en W) qui indique la puissance nette au point de raccordement au réseau.",
+        "data": {
+          "p1meter": "Capteur P1 pour le couplage intelligent"
+        }
+      },
+      "power_control": {
+        "title": "Régulation de puissance",
+        "description": "Rapidité et sensibilité avec lesquelles le gestionnaire suit le compteur P1. À modifier avec prudence : un intervalle plus court signifie plus de commandes envoyées aux appareils. Le compteur P1 lui-même est toujours suivi rapidement ; l'intervalle manuel ne s'applique qu'en mode manuel.",
+        "data": {
+          "time_zero": "Intervalle de mise à jour normal (s)",
+          "time_fast": "Intervalle de mise à jour rapide (s)",
+          "p1_stddev_min": "Variation P1 minimale (W)",
+          "power_start": "Puissance minimale pour démarrer un appareil (W)",
+          "power_tolerance": "Tolérance de puissance de l'appareil (W)",
+          "manual_interval": "Intervalle de mise à jour en mode manuel (s)",
+          "peak_limit": "Limite d'écrêtage des pics (W, 0 = désactivé)"
+        }
+      },
+      "slew": {
+        "title": "Slew rate et changement de sens",
+        "description": "Limite la vitesse de variation de la puissance demandée et passe toujours par 0 W (avec une courte pause) lors du passage entre charge et décharge. Cela protège les relais et l'onduleur. Les valeurs sont des valeurs par défaut, pas des spécifications du fabricant. L'appareil prêt pour les pics peut démarrer plus vite depuis la veille ; un changement de sens utilise toujours la vitesse normale.",
+        "data": {
+          "slew_enabled": "Limiter la vitesse de variation de la puissance",
+          "slew_up": "Augmentation maximale (W/s)",
+          "slew_down": "Diminution maximale (W/s)",
+          "flip_delay": "Pause à 0 W lors du changement de sens (s)",
+          "min_run": "Durée de fonctionnement minimale d'un appareil démarré (s)",
+          "ready_rate": "Démarrage plus rapide de l'appareil prêt (W/s)"
+        }
+      },
+      "lifetime": {
+        "title": "Durée de vie (flash et rôles)",
+        "description": "Avec plusieurs appareils, l'un décharge et un autre charge. Un rôle ne passe à un autre appareil que si celui-ci a autant de points de SoC d'avance et que le rôle a été conservé au moins 5 minutes. L'état sûr enregistre une fois 0 W dans la mémoire flash de l'appareil, de sorte qu'un appareil qui redémarre commence à 0 W ; il est écrit au plus une fois par heure. La charge et la décharge utilisent le moins d'appareils possible : un autre appareil ne démarre que lorsque ceux en marche portent cette part de leur limite ; les autres restent prêts pour les pics, comme une bouilloire.",
+        "data": {
+          "role_margin": "Marge de changement de rôle (SoC %)",
+          "fill_level": "Charge par appareil avant le démarrage d'un autre (%)",
+          "flash_safe_state": "Enregistrer l'état sûr (0 W) dans la mémoire flash de l'appareil"
+        }
+      },
+      "device_ips": {
+        "title": "Adresses des appareils",
+        "description": "Adresse IP ou nom d'hôte fixe par appareil zenSDK. Elle prime sur l'adresse issue du cloud et de mDNS, utile entre VLAN. Laissez vide pour une détection automatique.\n\n{devices}"
+      },
+      "diagnostics": {
+        "title": "Journalisation et simulation",
+        "description": "Options de débogage.",
+        "data": {
+          "mqttlog": "Journaliser la communication MQTT",
+          "simulation": "Mode simulation"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Impossible de joindre l'API Zendure. Vérifiez votre connexion Internet et réessayez.",
+      "malformed_token": "Le jeton n'est pas valide. Copiez à nouveau le jeton Home Assistant depuis l'application Zendure (Paramètres, Développeur).",
+      "api_rejected": "Zendure a rejeté la requête : {detail}",
+      "no_devices": "Jeton accepté, mais aucun appareil n'a été trouvé sur ce compte. Utilisez le compte Zendure auquel l'appareil est associé, avec la bonne région.",
+      "no_mqtt": "Jeton accepté, mais aucun serveur MQTT n'a été renvoyé. Activez le MQTT local ou cloud pour ce compte dans l'application Zendure.",
+      "invalid_auth": "Authentification invalide",
+      "unknown": "Erreur inattendue",
+      "mqtt_server_required": "Saisissez l'adresse du serveur MQTT.",
+      "fast_longer_than_normal": "L'intervalle rapide ne peut pas être plus long que l'intervalle normal.",
+      "invalid_address": "Saisissez une adresse IP ou un nom d'hôte valide."
+    }
+  },
+  "issues": {
+    "zensdk_unreachable": {
+      "title": "{name} ne répond pas",
+      "description": "L'appareil Zendure {name} ({address}) n'a pas répondu à des requêtes zenSDK locales répétées. Vérifiez l'alimentation et le Wi-Fi de l'appareil, son adresse IP (Configurer, Adresses des appareils) et le réseau entre Home Assistant et l'appareil. Le problème disparaît dès que l'appareil répond de nouveau."
+    },
+    "mqtt_cloud_disconnected": {
+      "title": "Le MQTT cloud Zendure n'est pas connecté",
+      "description": "Home Assistant n'est pas connecté au serveur MQTT cloud Zendure {server}. Les appareils qui en dépendent ne peuvent pas être pilotés. Vérifiez votre connexion Internet et le jeton. Le problème disparaît dès que la connexion est rétablie."
+    },
+    "mqtt_local_disconnected": {
+      "title": "Le broker MQTT local n'est pas connecté",
+      "description": "Home Assistant n'est pas connecté au serveur MQTT local {server}. Vérifiez que le broker fonctionne et que l'utilisateur et le mot de passe sont corrects. Le problème disparaît dès que la connexion est rétablie."
     }
   }
 }

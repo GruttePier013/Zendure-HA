@@ -1,4 +1,4 @@
-"""Interfaces with the Zendure Integration api sensors."""
+"""Interfaces with the Zendure HA-GP013 api sensors."""
 
 import logging
 import traceback
@@ -8,6 +8,7 @@ from typing import Any
 
 from homeassistant.components.sensor import SensorEntity, SensorEntityDescription
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
@@ -15,18 +16,18 @@ from homeassistant.helpers.template import Template
 from homeassistant.util import dt as dt_util
 from homeassistant.util.dt import parse_datetime
 
-from .entity import EntityDevice, EntityZendure
+from .entity import EntityAdder, EntityDevice, EntityZendure
 
 _LOGGER = logging.getLogger(__name__)
 
 
 async def async_setup_entry(_hass: HomeAssistant, _config_entry: ConfigEntry, async_add_entities: AddEntitiesCallback) -> None:
     """Set up the Zendure sensor."""
-    ZendureSensor.add = async_add_entities
+    ZendureSensor.add.attach(async_add_entities)
 
 
 class ZendureSensor(EntityZendure, SensorEntity):
-    add: AddEntitiesCallback
+    add: AddEntitiesCallback | EntityAdder = EntityAdder()
 
     def __init__(
         self,
@@ -40,9 +41,18 @@ class ZendureSensor(EntityZendure, SensorEntity):
         factor: int = 1,
         state: Any = None,
         icon: str | None = None,
+        category: EntityCategory | None = None,
+        deadband: float = 0,
     ) -> None:
-        """Initialize a Zendure entity."""
+        """Initialize a Zendure entity.
+
+        deadband: a change smaller than this (and not from or to 0) is not recorded. A power sensor that flickers
+        by 1-2 W would otherwise write a row to the recorder database every few seconds.
+        """
         super().__init__(device, uniqueid, "sensor")
+        self._deadband = deadband
+        if category is not None:
+            self._attr_entity_category = category
         self.entity_description = SensorEntityDescription(key=uniqueid, name=uniqueid, native_unit_of_measurement=uom, device_class=deviceclass, state_class=stateclass, icon=icon)
         self._value_template: Template | None = template
         if precision is not None:
@@ -60,6 +70,17 @@ class ZendureSensor(EntityZendure, SensorEntity):
                     new_value = float(new_value) / self.factor
                 except ValueError:
                     new_value = 0
+
+            old = self._attr_native_value
+            if (
+                self._deadband
+                and isinstance(new_value, (int, float))
+                and isinstance(old, (int, float))
+                and old != 0
+                and new_value != 0
+                and abs(new_value - old) < self._deadband
+            ):
+                return False
 
             if self.hass and new_value != self._attr_native_value:
                 self._attr_native_value = new_value

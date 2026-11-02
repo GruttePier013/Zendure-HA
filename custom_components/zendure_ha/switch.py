@@ -1,4 +1,4 @@
-"""Interfaces with the Zendure Integration switch."""
+"""Interfaces with the Zendure HA-GP013 switch."""
 
 from __future__ import annotations
 
@@ -13,18 +13,18 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.template import Template
 
-from .entity import EntityDevice, EntityZendure
+from .entity import EntityAdder, EntityDevice, EntityZendure
 
 _LOGGER = logging.getLogger(__name__)
 
 
 async def async_setup_entry(_hass: HomeAssistant, _config_entry: ConfigEntry, async_add_entities: AddEntitiesCallback) -> None:
     """Set up the Zendure switch."""
-    ZendureSwitch.add = async_add_entities
+    ZendureSwitch.add.attach(async_add_entities)
 
 
 class ZendureSwitch(EntityZendure, SwitchEntity):
-    add: AddEntitiesCallback
+    add: AddEntitiesCallback | EntityAdder = EntityAdder()
 
     def __init__(
         self,
@@ -53,7 +53,7 @@ class ZendureSwitch(EntityZendure, SwitchEntity):
             if self._attr_is_on == is_on:
                 return False
 
-            _LOGGER.info("Update switch: %s => %s", self._attr_unique_id, is_on)
+            _LOGGER.debug("Update switch: %s => %s", self._attr_unique_id, is_on)
 
             self._attr_is_on = is_on
             if self.hass and self.hass.loop.is_running():

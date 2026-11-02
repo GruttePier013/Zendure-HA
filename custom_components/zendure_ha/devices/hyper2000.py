@@ -8,7 +8,6 @@ from typing import Any
 from homeassistant.core import HomeAssistant
 
 from custom_components.zendure_ha.device import ZendureLegacy
-from custom_components.zendure_ha.sensor import ZendureRestoreSensor, ZendureSensor
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -21,7 +20,7 @@ class Hyper2000(ZendureLegacy):
         self.maxSolar = -1600
 
     async def charge(self, power: int) -> int:
-        _LOGGER.info("Power charge %s => %s", self.name, power)
+        _LOGGER.debug("Power charge %s => %s", self.name, power)
         self.mqttInvoke(
             {
                 "arguments": [
@@ -45,7 +44,7 @@ class Hyper2000(ZendureLegacy):
         return power
 
     async def discharge(self, power: int) -> int:
-        _LOGGER.info("Power discharge %s => %s", self.name, power)
+        _LOGGER.debug("Power discharge %s => %s", self.name, power)
         self.mqttInvoke(
             {
                 "arguments": [
