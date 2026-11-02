@@ -19,9 +19,7 @@ Version 1.4.4 of Zendure-HA was the starting point. Since then, the control part
 - It keeps the domain `zendure_ha`, so it **replaces** Zendure-HA. Your devices, entities and settings carry over, but the two cannot be installed side by side.
 - Problems with this integration belong in [this repository's issues][issues], not with the Zendure-HA project.
 - Device support, protocol fixes and new models from Zendure-HA are adopted where they fit.
-
-If you want to support the original author: [![Buy Me a Coffee][buymecoffeebadge]][buymecoffee]
-
+- 
 ---
 
 ## Features
