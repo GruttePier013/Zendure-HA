@@ -3,7 +3,7 @@
 [![hacs][hacsbadge]][hacs]
 
 **A Home Assistant integration for Zendure home batteries that follows your P1 meter closely, uses as few inverters as needed and is easy on your hardware.**
-** Refactored to make more efficient use of multi inverter setups**
+**Refactored to make more efficient use of multi inverter setups**
 
 Zendure HA-GP013 connects Zendure SolarFlow, Hyper, Hub, AIO and Ace devices to Home Assistant and steers them toward zero at the grid connection (*nul op de meter*). It is an independent integration that started from [Zendure-HA](https://github.com/Zendure/Zendure-HA) 1.4.4 and has since gone its own way, with its own control logic, settings and release cycle.
 
@@ -98,13 +98,11 @@ All settings are under *Settings → Devices & services → Zendure HA-GP013 →
 | Logging, simulation and test data | MQTT logging, simulation log, P1 recording every second until midnight |
 
 ### Reading a HomeWizard P1 meter directly
-
 1. Enter the IP address of the P1 meter in *Configure → P1 meter*. The address from the HomeWizard integration is suggested.
 2. If the HomeWizard integration already uses API v2, its token is reused. Otherwise, press the button on the P1 meter and select *Submit* within 30 seconds.
 3. Alternatively, tick *API v1*. You then need to turn on *Local API* in the HomeWizard app.
 
 ### Recording P1 as test data
-
 *Configure → Logging, simulation and test data → Record P1 every second until midnight* writes every P1 value with the battery power to `<config>/zendure_ha/p1_<YYYY-MM-DD>.csv`. When the HomeWizard P1 meter is read directly, that is one value per second. The recording switches itself off at midnight. A day is about 3 MB. The simulation can replay such a file:
 
 ```
@@ -112,12 +110,10 @@ SCENARIO=file P1FILE=p1_2026-11-02.csv FROM=10:00 TO=16:00 python scripts/compar
 ```
 
 ### Tips
-
 - Give each inverter and the P1 meter a fixed address (a DHCP reservation) in your router.
 - With several inverters, a spread threshold of 85 % (the default) keeps one SolarFlow 2400 running up to about 1900–2000 W.
 
 ## Further reading
-
 The guides of Zendure-HA also apply to this integration:
 
 - [Installation and Zendure app token](https://github.com/Zendure/Zendure-HA/wiki/Installation)
@@ -138,11 +134,3 @@ Pull requests are welcome. The tests run with `pytest` (`requirements_test.txt`)
 
 MIT License, see [LICENSE](LICENSE). The copyright notice of Zendure-HA is kept.
 
-[buymecoffee]: https://www.buymeacoffee.com/fireson
-[buymecoffeebadge]: https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png
-[license-shield]: https://img.shields.io/github/license/GruttePier013/Zendure-HA-GP013.svg?style=for-the-badge
-[hacs]: https://github.com/GruttePier013/Zendure-HA-GP013
-[hacsbadge]: https://img.shields.io/badge/HACS-Custom-orange.svg?style=for-the-badge
-[release]: https://github.com/GruttePier013/Zendure-HA-GP013/releases
-[releasebadge]: https://img.shields.io/github/v/release/GruttePier013/Zendure-HA-GP013?style=for-the-badge
-[issues]: https://github.com/GruttePier013/Zendure-HA-GP013/issues
