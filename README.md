@@ -1,6 +1,6 @@
 # Zendure HA-GP013
 
-[![hacs][hacsbadge]][hacs] [![releasebadge]][release] [![License][license-shield]](LICENSE)
+[![hacs][hacsbadge]][hacs]
 
 **A Home Assistant integration for Zendure home batteries that follows your P1 meter closely, uses as few inverters as needed and is easy on your hardware.**
 
