@@ -1,7 +1,5 @@
 # Zendure HA-GP013
 
-[![hacs][hacsbadge]][hacs] [![releasebadge]][release] [![License][license-shield]](LICENSE)
-
 **A Home Assistant integration for Zendure home batteries that follows your P1 meter closely, uses as few inverters as needed and is easy on your hardware.**
 
 Zendure HA-GP013 connects Zendure SolarFlow, Hyper, Hub, AIO and Ace devices to Home Assistant and steers them toward zero at the grid connection (*nul op de meter*). It is an independent integration that started from [Zendure-HA](https://github.com/Zendure/Zendure-HA) 1.4.4 and has since gone its own way, with its own control logic, settings and release cycle.
