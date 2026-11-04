@@ -83,9 +83,6 @@
       "hems_state": {
         "name": "HEMS aktiv"
       },
-      "slew_active": {
-        "name": "Rampe aktiv (Slew-begrenzt)"
-      },
       "mqtt_cloud": {
         "name": "Cloud-MQTT verbunden"
       },
@@ -112,8 +109,8 @@
       "soc_set": {
         "name": "SoC-Zielwert"
       },
-      "slew_factor": {
-        "name": "Slew-Rate-Faktor"
+      "p1_target": {
+        "name": "P1-Ziel (Band)"
       }
     },
     "sensor": {
@@ -404,6 +401,9 @@
       "p1_value": {
         "name": "P1-Wert"
       },
+      "p1_rate": {
+        "name": "P1-Werte pro Minute"
+      },
       "dispatch_setpoint": {
         "name": "Verteilungs-Sollwert"
       },
@@ -419,8 +419,8 @@
       "devices_idle": {
         "name": "Inaktive Geräte"
       },
-      "devices_ramping": {
-        "name": "Geräte mit aktiver Rampe"
+      "devices_sleep": {
+        "name": "Geräte im Ruhezustand"
       },
       "flash_writes": {
         "name": "Flash-Schreibvorgänge"
@@ -440,6 +440,7 @@
           "charging": "Lädt",
           "discharging": "Entlädt",
           "standby": "Standby",
+          "sleeping": "Schläft",
           "reserve": "Standby (Wolkenreserve)",
           "not_responding": "Antwortet nicht"
         }
@@ -602,14 +603,15 @@
     "step": {
       "init": {
         "title": "Zendure HA-GP013 – Einstellungen",
-        "description": "P1-Sensor: {p1meter}\nToken: {token}\nMQTT: {mqtt}\nLeistungsregelung (normal / schnell): {control}\nSlew-Rate (hoch / runter, Wartezeit Richtungswechsel): {slew}\nMehrere Wechselrichter: {lifetime}\nFeste Geräteadressen: {addresses}\nMQTT-Protokollierung: {logging}, Simulation: {simulation}\n\nWähle die Einstellungen, die du ändern möchtest.",
+        "description": "P1-Sensor: {p1meter}\nToken: {token}\nMQTT: {mqtt}\nLeistungsregelung (normal / schnell): {control}\nRichtungswechsel (Wartezeit, Mindestlaufzeit): {slew}\nMehrere Wechselrichter: {lifetime}\nSolarprognose: {solar}\nFeste Geräteadressen: {addresses}\nMQTT-Protokollierung: {logging}, Simulation: {simulation}\n\nWähle die Einstellungen, die du ändern möchtest.",
         "menu_options": {
           "connection": "Konto / Token",
           "mqtt": "MQTT & WLAN",
           "p1_meter": "P1-Zähler",
           "power_control": "Leistungsregelung",
-          "slew": "Slew-Rate & Richtungswechsel",
+          "slew": "Schutz bei Richtungswechsel",
           "lifetime": "Mehrere Wechselrichter (Verteilen & Rollen)",
+          "solar": "Solarprognose",
           "device_ips": "Geräteadressen",
           "diagnostics": "Protokollierung, Simulation und Testdaten",
           "finish": "Speichern und schließen"
@@ -658,19 +660,19 @@
           "power_tolerance": "Leistungstoleranz des Geräts (W)",
           "manual_interval": "Aktualisierungsintervall im manuellen Modus (s)",
           "peak_limit": "Spitzenkappung (W, 0 = aus)",
-          "export_bias": "Exportreserve beim Laden bei wechselnder Bewölkung (W, 0 = aus)"
+          "export_bias": "Exportreserve beim Laden bei wechselnder Bewölkung (W, 0 = aus)",
+          "jump_w": "Spitzenerkennung: P1-Sprung, der sofort einen Zyklus startet (W, 0 = aus)"
+        },
+        "data_description": {
+          "jump_w": "Wenn Bezug oder Einspeisung seit dem letzten Regelzyklus um so viel gewachsen sind (ein Wasserkocher oder Kochfeld schaltet ein, oder aus, während die Batterien entladen), startet der nächste Zyklus sofort statt nach dem schnellen Intervall. Eine Last, die sich aufbaut, wird erkannt, sobald so viel hinzukommt. Die Reaktion der Batterien zählt nie als Sprung."
         }
       },
       "slew": {
-        "title": "Slew-Rate & Richtungswechsel",
-        "description": "Begrenzt, wie schnell sich die angeforderte Leistung ändert, und läuft beim Wechsel zwischen Laden und Entladen immer über 0 W (mit kurzer Pause). Das schont Relais und Wechselrichter. Die Werte sind Standardwerte und keine Herstellerangaben. Das für Spitzen bereitstehende Gerät darf aus dem Standby schneller starten; ein Richtungswechsel nutzt immer die normale Rate. Ein Richtungswechsel wird nach 2 s freigegeben, sobald das Gerät 0 W meldet, sonst nach der maximalen Pause.",
+        "title": "Schutz bei Richtungswechsel",
+        "description": "Der Wechselrichter regelt seine Leistung selbst hoch und runter (etwa 250 W/s bei einem SolarFlow 2400 AC+); die Integration begrenzt das nicht mehr. Ein Wechsel zwischen Laden und Entladen geht immer über bestätigte 0 W und wartet mindestens die Wartezeit unten, wenn 0 W nicht bestätigt ist. Ein gestarteter Wechselrichter läuft die Mindestlaufzeit mit niedriger Leistung weiter, damit eine kurze Störung das Relais nicht klappern lässt.",
         "data": {
-          "slew_enabled": "Änderungsrate der Leistung begrenzen",
-          "slew_up": "Maximaler Anstieg (W/s)",
-          "slew_down": "Maximaler Abfall (W/s)",
-          "flip_delay": "Maximale Pause bei 0 W beim Richtungswechsel, ohne bestätigte 0 W (s)",
-          "min_run": "Mindestlaufzeit eines gestarteten Geräts (s)",
-          "ready_rate": "Schnellerer Anstieg: Start des bereitstehenden Geräts und Geräte, die schon in derselben Richtung laufen (W/s)"
+          "flip_delay": "Wartezeit beim Richtungswechsel, wenn 0 W nicht bestätigt ist (s)",
+          "min_run": "Mindestlaufzeit eines gestarteten Geräts (s)"
         }
       },
       "lifetime": {
@@ -679,10 +681,14 @@
         "data": {
           "role_margin": "Rollenwechsel-Marge (SoC %)",
           "fill_level": "Verteilschwelle (%)",
-          "flash_safe_state": "Sicheren Zustand (0 W) im Geräte-Flash speichern"
+          "flash_safe_state": "Sicheren Zustand (0 W) im Geräte-Flash speichern",
+          "sleep_after": "Ruhende Wechselrichter schlafen lassen nach (min, 0 = aus)",
+          "ready_hours": "Entlader nur wach halten um (Stunden, z. B. 7-9,12-13,17-19)"
         },
         "data_description": {
-          "fill_level": "Last pro Wechselrichter, bevor die Leistung auf einen weiteren verteilt wird; darunter wird auf weniger zusammengelegt. 85 % bei 3 × 2400 W: 1 Wechselrichter bis etwa 1900–2000 W. Bei schnell wechselnder Bewölkung gelten 70 %."
+          "fill_level": "Last pro Wechselrichter, bevor die Leistung auf einen weiteren verteilt wird; darunter wird auf weniger zusammengelegt. 85 % bei 3 × 2400 W: 1 Wechselrichter bis etwa 1900–2000 W. Bei schnell wechselnder Bewölkung gelten 70 %.",
+          "sleep_after": "Ein ruhender Zendure-Wechselrichter verbraucht etwa 30 W, solange er auf Befehle wartet (smartMode 1). Nach so vielen Minuten bei 0 W wird er schlafen gelegt (smartMode 0, etwa 5 W); der nächste Befehl weckt ihn, was etwa 1–2 s länger dauert. Der Wechselrichter mit der Entladerolle bleibt wach für die nächste Spitze (siehe die Stunden unten). 0 = immer wach. Mit den Verlusten der Wechselrichter simuliert: etwa 850 Wh pro Tag weniger im November, 230 Wh im Sommer.",
+          "ready_hours": "Mit Ruhezustand bleibt der Wechselrichter mit der Entladerolle wach, um die nächste Spitze sofort abzufangen. Hier lässt sich das auf die Stunden mit den meisten Spitzen begrenzen (Ortszeit, z. B. 7-9,12-13,17:30-19); außerhalb darf er auch schlafen, und zu Beginn einer solchen Stunde wird er geweckt. Leer = immer wach. Mit Verlusten simuliert: etwa 120 Wh pro Tag weniger im November."
         }
       },
       "device_ips": {
@@ -691,11 +697,12 @@
       },
       "diagnostics": {
         "title": "Protokollierung, Simulation und Testdaten",
-        "description": "Debug-Optionen. Die P1-Aufzeichnung schreibt jeden P1-Wert (jede Sekunde bei einem direkt gelesenen HomeWizard P1-Zähler) mit der Batterieleistung nach <config>/zendure_ha/p1_<Datum>.csv, als Testdaten für die Simulation. Sie schaltet sich um Mitternacht selbst aus.",
+        "description": "Debug-Optionen. Die P1-Aufzeichnung schreibt jeden P1-Wert (jede Sekunde bei einem direkt gelesenen HomeWizard P1-Zähler) mit der Batterieleistung nach <config>/zendure_ha/p1_<Datum>.csv, als Testdaten für die Simulation. Mit dem Reglerzustand zeigt jede Zeile auch, was der Manager und jedes Gerät taten, und events_<Datum>.csv enthält Richtungswechsel, Befehle, Moduswechsel und Warnungen. Sie schaltet sich um Mitternacht selbst aus; ältere Tage werden komprimiert.",
         "data": {
           "mqttlog": "MQTT-Kommunikation protokollieren",
           "simulation": "Simulationsmodus",
-          "p1_record": "P1 jede Sekunde bis Mitternacht aufzeichnen (Testdaten)"
+          "p1_record": "P1 jede Sekunde bis Mitternacht aufzeichnen (Testdaten)",
+          "p1_record_detail": "Auch den Reglerzustand aufzeichnen (Modus, Sollwert, Zyklen, Rollen und jedes Gerät; etwa 2,5-mal größer)"
         }
       },
       "p1_token": {
@@ -703,6 +710,13 @@
         "description": "Um den P1-Zähler unter {host} über API v2 zu lesen, wird ein Token benötigt. Drücke die Taste am P1-Zähler und klicke innerhalb von 30 Sekunden auf Absenden.\n\nOder wähle API v1: dann wird der Zähler jede Sekunde über die lokale API gelesen (\"Lokale API\" in der HomeWizard-App einschalten).",
         "data": {
           "use_v1": "API v1 (lokale API) statt eines Tokens verwenden"
+        }
+      },
+      "solar": {
+        "title": "Solarprognose",
+        "description": "Optional: ein Sensor mit der Solarprognose für heute, z. B. sensor.solcast_pv_forecast_forecast_today (die Stunden ab jetzt werden addiert) oder sensor.solcast_pv_forecast_forecast_remaining_today. Damit speichern die Batterien an Tagen, an denen sie nicht voll werden, jede Wh: die Einspeisemarge bei wechselnden Wolken und ein negatives P1-Ziel werden dann nicht verwendet. Wird heute (fast) keine Sonne mehr erwartet, steht der Wechselrichter mit der Laderolle zum Entladen bereit, statt auf das Laden zu warten. Leer lassen zum Ausschalten.",
+        "data": {
+          "solar_forecast": "Sensor Solarprognose (kWh heute)"
         }
       }
     },
@@ -719,7 +733,8 @@
       "invalid_address": "Gib eine gültige IP-Adresse oder einen gültigen Hostnamen ein.",
       "homewizard_press_button": "Der P1-Zähler hat noch kein Token gegeben: Taste drücken und innerhalb von 30 Sekunden auf Absenden klicken.",
       "homewizard_unreachable": "Der HomeWizard P1-Zähler antwortet nicht unter dieser Adresse.",
-      "homewizard_v1_unreachable": "Der P1-Zähler antwortet nicht über API v1: \"Lokale API\" in der HomeWizard-App einschalten."
+      "homewizard_v1_unreachable": "Der P1-Zähler antwortet nicht über API v1: \"Lokale API\" in der HomeWizard-App einschalten.",
+      "invalid_hours": "Stunden wie 7-9,12-13,17:30-19 eingeben (von-bis, durch Kommas getrennt)."
     }
   },
   "issues": {
@@ -738,6 +753,14 @@
     "zensdk_no_address": {
       "title": "Keine Adresse für {name} bekannt",
       "description": "Die Zendure-Cloud hat keine IP-Adresse für {name} geliefert, daher hat die Integration den zusammengesetzten Namen {address} versucht, der nicht antwortet. Trage die IP-Adresse des Geräts (Zendure-App, Geräteinformationen, oder die DHCP-Liste deines Routers) unter Konfigurieren, Geräteadressen ein. Eine feste DHCP-Zuweisung wird empfohlen. Bis dahin funktioniert das Gerät nur mit der Verbindung auf Cloud."
+    },
+    "p1_stale": {
+      "title": "Der P1-Zähler sendet keine Werte",
+      "description": "Seit mehr als einer Minute kam kein P1-Wert. Die Batterien halten ihre Leistung vorerst; nach 5 Minuten fallen sie auf die Grundlast der letzten 10 Minuten zurück (nur weniger, nie mehr), damit sie keine gespeicherte Energie einspeisen und nicht aus dem Netz laden. Prüfen Sie den P1-Zähler, sein WLAN und die HomeWizard-Integration. Die Meldung verschwindet, sobald wieder Werte kommen."
+    },
+    "second_controller": {
+      "title": "Eine andere Steuerung ändert {devices}",
+      "description": "Die Leistungsgrenzen von {devices} wurden in den letzten 15 Minuten mehrfach von etwas anderem als dieser Integration geändert: ein Energieplan oder Smart-Modus in der Zendure-App, eine andere Integration oder eine Automatisierung. Zwei Steuerungen arbeiten gegeneinander, was Energie kostet und viele zusätzliche Befehle verursacht. Schalten Sie die andere aus. Die Meldung verschwindet nach einer Stunde ohne fremde Änderungen."
     }
   }
 }

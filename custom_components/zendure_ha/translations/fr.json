@@ -83,9 +83,6 @@
       "hems_state": {
         "name": "HEMS actif"
       },
-      "slew_active": {
-        "name": "Rampe en cours (limitée par le slew)"
-      },
       "mqtt_cloud": {
         "name": "MQTT cloud connecté"
       },
@@ -112,8 +109,8 @@
       "soc_set": {
         "name": "SOC maximum"
       },
-      "slew_factor": {
-        "name": "Facteur de slew rate"
+      "p1_target": {
+        "name": "Cible P1 (bande)"
       }
     },
     "sensor": {
@@ -404,6 +401,9 @@
       "p1_value": {
         "name": "Valeur P1"
       },
+      "p1_rate": {
+        "name": "Valeurs P1 par minute"
+      },
       "dispatch_setpoint": {
         "name": "Consigne de répartition"
       },
@@ -419,8 +419,8 @@
       "devices_idle": {
         "name": "Appareils au repos"
       },
-      "devices_ramping": {
-        "name": "Appareils en rampe"
+      "devices_sleep": {
+        "name": "Appareils en veille profonde"
       },
       "flash_writes": {
         "name": "Écritures flash"
@@ -440,6 +440,7 @@
           "charging": "En charge",
           "discharging": "En décharge",
           "standby": "Veille",
+          "sleeping": "En veille profonde",
           "reserve": "Veille (réserve nuages)",
           "not_responding": "Ne répond pas"
         }
@@ -602,14 +603,15 @@
     "step": {
       "init": {
         "title": "Paramètres Zendure HA-GP013",
-        "description": "Capteur P1 : {p1meter}\nJeton : {token}\nMQTT : {mqtt}\nRégulation de puissance (normale / rapide) : {control}\nSlew rate (montée / descente, délai de changement de sens) : {slew}\nPlusieurs onduleurs : {lifetime}\nAdresses fixes des appareils : {addresses}\nJournal MQTT : {logging}, simulation : {simulation}\n\nChoisissez les paramètres à modifier.",
+        "description": "Capteur P1 : {p1meter}\nJeton : {token}\nMQTT : {mqtt}\nRégulation de puissance (normale / rapide) : {control}\nChangement de sens (délai, durée minimale) : {slew}\nPlusieurs onduleurs : {lifetime}\nPrévision solaire : {solar}\nAdresses fixes des appareils : {addresses}\nJournal MQTT : {logging}, simulation : {simulation}\n\nChoisissez les paramètres à modifier.",
         "menu_options": {
           "connection": "Compte / jeton",
           "mqtt": "MQTT et Wi-Fi",
           "p1_meter": "Compteur P1",
           "power_control": "Régulation de puissance",
-          "slew": "Slew rate et changement de sens",
+          "slew": "Protection au changement de sens",
           "lifetime": "Plusieurs onduleurs (répartition & rôles)",
+          "solar": "Prévision solaire",
           "device_ips": "Adresses des appareils",
           "diagnostics": "Journalisation, simulation et données de test",
           "finish": "Enregistrer et fermer"
@@ -658,19 +660,19 @@
           "power_tolerance": "Tolérance de puissance de l'appareil (W)",
           "manual_interval": "Intervalle de mise à jour en mode manuel (s)",
           "peak_limit": "Limite d'écrêtage des pics (W, 0 = désactivé)",
-          "export_bias": "Marge d'injection pendant la charge par nuages changeants (W, 0 = désactivé)"
+          "export_bias": "Marge d'injection pendant la charge par nuages changeants (W, 0 = désactivé)",
+          "jump_w": "Détection de pics : saut P1 qui lance un cycle immédiatement (W, 0 = désactivé)"
+        },
+        "data_description": {
+          "jump_w": "Si l'import ou l'export a augmenté de cette valeur depuis le dernier cycle de régulation (une bouilloire ou une plaque qui s'allume, ou s'éteint pendant la décharge des batteries), le cycle suivant démarre immédiatement au lieu d'attendre l'intervalle rapide. Une charge qui monte progressivement est détectée dès que cette valeur s'ajoute. La réaction des batteries ne compte jamais comme un saut."
         }
       },
       "slew": {
-        "title": "Slew rate et changement de sens",
-        "description": "Limite la vitesse de variation de la puissance demandée et passe toujours par 0 W (avec une courte pause) lors du passage entre charge et décharge. Cela protège les relais et l'onduleur. Les valeurs sont des valeurs par défaut, pas des spécifications du fabricant. L'appareil prêt pour les pics peut démarrer plus vite depuis la veille ; un changement de sens utilise toujours la vitesse normale. Un changement de sens est autorisé après 2 s dès que l'appareil indique 0 W, sinon après la pause maximale.",
+        "title": "Protection au changement de sens",
+        "description": "L'onduleur fait monter et descendre sa puissance lui-même (environ 250 W/s pour un SolarFlow 2400 AC+) ; l'intégration ne la limite plus. Un passage entre charge et décharge passe toujours par 0 W confirmé et attend au moins le délai ci-dessous si 0 W n'est pas confirmé. Un onduleur démarré continue à faible puissance pendant la durée minimale, afin qu'une courte perturbation ne fasse pas claquer le relais.",
         "data": {
-          "slew_enabled": "Limiter la vitesse de variation de la puissance",
-          "slew_up": "Augmentation maximale (W/s)",
-          "slew_down": "Diminution maximale (W/s)",
-          "flip_delay": "Pause maximale à 0 W lors du changement de sens, sans 0 W confirmé (s)",
-          "min_run": "Durée de fonctionnement minimale d'un appareil démarré (s)",
-          "ready_rate": "Montée plus rapide : démarrage de l'appareil prêt et appareils déjà en marche dans le même sens (W/s)"
+          "flip_delay": "Délai au changement de sens si 0 W n'est pas confirmé (s)",
+          "min_run": "Durée minimale de fonctionnement d'un appareil démarré (s)"
         }
       },
       "lifetime": {
@@ -679,10 +681,14 @@
         "data": {
           "role_margin": "Marge de changement de rôle (SoC %)",
           "fill_level": "Seuil de répartition (%)",
-          "flash_safe_state": "Enregistrer l'état sûr (0 W) dans la flash de l'appareil"
+          "flash_safe_state": "Enregistrer l'état sûr (0 W) dans la flash de l'appareil",
+          "sleep_after": "Mettre en veille les onduleurs à l'arrêt après (min, 0 = désactivé)",
+          "ready_hours": "Garder l'onduleur de décharge éveillé seulement à (heures, ex. 7-9,12-13,17-19)"
         },
         "data_description": {
-          "fill_level": "Charge par onduleur avant que la puissance soit répartie sur un onduleur de plus ; en dessous, elle est regroupée sur moins. 85 % avec 3 × 2400 W : 1 onduleur jusqu'à environ 1900–2000 W. Avec des nuages changeants, 70 % est utilisé."
+          "fill_level": "Charge par onduleur avant que la puissance soit répartie sur un onduleur de plus ; en dessous, elle est regroupée sur moins. 85 % avec 3 × 2400 W : 1 onduleur jusqu'à environ 1900–2000 W. Avec des nuages changeants, 70 % est utilisé.",
+          "sleep_after": "Un onduleur Zendure à l'arrêt consomme environ 30 W tant qu'il attend des commandes (smartMode 1). Après ce nombre de minutes à 0 W, il est mis en veille (smartMode 0, environ 5 W) ; la commande suivante le réveille, ce qui prend environ 1–2 s de plus. L'onduleur qui a le rôle de décharge reste éveillé pour le prochain pic (voir les heures ci-dessous). 0 = toujours éveillé. Simulé avec les pertes des onduleurs : environ 850 Wh par jour de moins en novembre, 230 Wh en été.",
+          "ready_hours": "Avec la veille activée, l'onduleur qui a le rôle de décharge reste éveillé pour couvrir le prochain pic immédiatement. Ici vous pouvez limiter cela aux heures avec le plus de pics (heure locale, ex. 7-9,12-13,17:30-19) ; en dehors il peut aussi dormir, et au début d'une telle heure il est réveillé. Vide = toujours éveillé. Simulé avec les pertes : environ 120 Wh par jour de moins en novembre."
         }
       },
       "device_ips": {
@@ -691,11 +697,12 @@
       },
       "diagnostics": {
         "title": "Journalisation, simulation et données de test",
-        "description": "Options de débogage. L'enregistrement P1 écrit chaque valeur P1 (chaque seconde avec un compteur P1 HomeWizard lu directement) avec la puissance des batteries dans <config>/zendure_ha/p1_<date>.csv, comme données de test pour la simulation. Il s'arrête de lui-même à minuit.",
+        "description": "Options de débogage. L'enregistrement P1 écrit chaque valeur P1 (chaque seconde avec un compteur P1 HomeWizard lu directement) avec la puissance des batteries dans <config>/zendure_ha/p1_<date>.csv, comme données de test pour la simulation. Avec l'état de la régulation, chaque ligne montre aussi ce qu'ont fait le gestionnaire et chaque appareil, et events_<date>.csv liste les changements de sens, commandes, changements de mode et avertissements. Il s'arrête de lui-même à minuit ; les jours précédents sont compressés.",
         "data": {
           "mqttlog": "Journaliser la communication MQTT",
           "simulation": "Mode simulation",
-          "p1_record": "Enregistrer P1 chaque seconde jusqu'à minuit (données de test)"
+          "p1_record": "Enregistrer P1 chaque seconde jusqu'à minuit (données de test)",
+          "p1_record_detail": "Enregistrer aussi l'état de la régulation (mode, consigne, cycles, rôles et chaque appareil ; environ 2,5 fois plus grand)"
         }
       },
       "p1_token": {
@@ -703,6 +710,13 @@
         "description": "Pour lire le compteur P1 à {host} via l'API v2, un jeton est nécessaire. Appuyez sur le bouton du compteur P1 et cliquez sur Valider dans les 30 secondes.\n\nOu cochez API v1 : le compteur est alors lu chaque seconde via l'API locale (activez « API locale » dans l'application HomeWizard).",
         "data": {
           "use_v1": "Utiliser l'API v1 (API locale) au lieu d'un jeton"
+        }
+      },
+      "solar": {
+        "title": "Prévision solaire",
+        "description": "Facultatif : un capteur avec la prévision solaire du jour, par ex. sensor.solcast_pv_forecast_forecast_today (les heures à partir de maintenant sont additionnées) ou sensor.solcast_pv_forecast_forecast_remaining_today. Les jours où les batteries ne seront pas pleines, elles stockent alors chaque Wh : la marge d'export par nuages changeants et une cible P1 négative ne sont pas utilisées. Si (presque) plus aucun soleil n'est attendu aujourd'hui, l'onduleur qui a le rôle de charge est prêt à décharger au lieu d'attendre la charge. Laisser vide pour désactiver.",
+        "data": {
+          "solar_forecast": "Capteur de prévision solaire (kWh aujourd'hui)"
         }
       }
     },
@@ -719,7 +733,8 @@
       "invalid_address": "Saisissez une adresse IP ou un nom d'hôte valide.",
       "homewizard_press_button": "Le compteur P1 n'a pas encore donné de jeton : appuyez sur son bouton et cliquez sur Valider dans les 30 secondes.",
       "homewizard_unreachable": "Le compteur P1 HomeWizard ne répond pas à cette adresse.",
-      "homewizard_v1_unreachable": "Le compteur P1 ne répond pas via l'API v1 : activez « API locale » dans l'application HomeWizard."
+      "homewizard_v1_unreachable": "Le compteur P1 ne répond pas via l'API v1 : activez « API locale » dans l'application HomeWizard.",
+      "invalid_hours": "Saisissez des heures comme 7-9,12-13,17:30-19 (de-à, séparées par des virgules)."
     }
   },
   "issues": {
@@ -738,6 +753,14 @@
     "zensdk_no_address": {
       "title": "Aucune adresse connue pour {name}",
       "description": "Le cloud Zendure n'a pas fourni d'adresse IP pour {name}, l'intégration a donc essayé le nom construit {address}, qui ne répond pas. Saisissez l'adresse IP de l'appareil (application Zendure, informations de l'appareil, ou la liste DHCP de votre routeur) dans Configurer, Adresses des appareils. Une adresse DHCP fixe est recommandée. En attendant, l'appareil ne fonctionne qu'avec la connexion sur cloud."
+    },
+    "p1_stale": {
+      "title": "Le compteur P1 n'envoie plus de valeurs",
+      "description": "Aucune valeur P1 n'est arrivée depuis plus d'une minute. Les batteries gardent leur puissance pour l'instant ; après 5 minutes, elles reviennent à la consommation de base des 10 dernières minutes (seulement moins, jamais plus), afin de ne pas injecter d'énergie stockée ni charger depuis le réseau. Vérifiez le compteur P1, son Wi-Fi et l'intégration HomeWizard. Le problème disparaît dès que des valeurs arrivent à nouveau."
+    },
+    "second_controller": {
+      "title": "Un autre contrôleur modifie {devices}",
+      "description": "Les limites de puissance de {devices} ont été modifiées plusieurs fois au cours des 15 dernières minutes par autre chose que cette intégration : un plan énergétique ou le mode intelligent de l'app Zendure, une autre intégration ou une automatisation. Deux contrôleurs se contrarient, ce qui coûte de l'énergie et génère de nombreuses commandes supplémentaires. Désactivez l'autre. Le problème disparaît après une heure sans modification étrangère."
     }
   }
 }

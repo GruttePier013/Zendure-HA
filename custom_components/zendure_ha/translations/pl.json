@@ -83,9 +83,6 @@
       "hems_state": {
         "name": "HEMS aktywny"
       },
-      "slew_active": {
-        "name": "Rampa aktywna (ograniczenie slew)"
-      },
       "mqtt_cloud": {
         "name": "MQTT w chmurze połączony"
       },
@@ -112,8 +109,8 @@
       "soc_set": {
         "name": "Docelowe SoC"
       },
-      "slew_factor": {
-        "name": "Współczynnik slew rate"
+      "p1_target": {
+        "name": "Cel P1 (pasmo)"
       }
     },
     "sensor": {
@@ -404,6 +401,9 @@
       "p1_value": {
         "name": "Wartość P1"
       },
+      "p1_rate": {
+        "name": "Wartości P1 na minutę"
+      },
       "dispatch_setpoint": {
         "name": "Wartość zadana rozdziału"
       },
@@ -419,8 +419,8 @@
       "devices_idle": {
         "name": "Urządzenia bezczynne"
       },
-      "devices_ramping": {
-        "name": "Urządzenia w rampie"
+      "devices_sleep": {
+        "name": "Urządzenia uśpione"
       },
       "flash_writes": {
         "name": "Zapisy do pamięci flash"
@@ -440,6 +440,7 @@
           "charging": "Ładuje",
           "discharging": "Rozładowuje",
           "standby": "Czuwanie",
+          "sleeping": "Uśpiony",
           "reserve": "Czuwanie (rezerwa chmur)",
           "not_responding": "Nie odpowiada"
         }
@@ -602,14 +603,15 @@
     "step": {
       "init": {
         "title": "Ustawienia Zendure HA-GP013",
-        "description": "Czujnik P1: {p1meter}\nToken: {token}\nMQTT: {mqtt}\nRegulacja mocy (normalna / szybka): {control}\nSlew rate (w górę / w dół, opóźnienie zmiany kierunku): {slew}\nWiele falowników: {lifetime}\nStałe adresy urządzeń: {addresses}\nLogowanie MQTT: {logging}, symulacja: {simulation}\n\nWybierz ustawienia, które chcesz zmienić.",
+        "description": "Czujnik P1: {p1meter}\nToken: {token}\nMQTT: {mqtt}\nRegulacja mocy (normalna / szybka): {control}\nZmiana kierunku (opóźnienie, minimalny czas pracy): {slew}\nWiele falowników: {lifetime}\nPrognoza słoneczna: {solar}\nStałe adresy urządzeń: {addresses}\nLogowanie MQTT: {logging}, symulacja: {simulation}\n\nWybierz ustawienia, które chcesz zmienić.",
         "menu_options": {
           "connection": "Konto / token",
           "mqtt": "MQTT i Wi-Fi",
           "p1_meter": "Licznik P1",
           "power_control": "Regulacja mocy",
-          "slew": "Slew rate i zmiana kierunku",
+          "slew": "Ochrona przy zmianie kierunku",
           "lifetime": "Wiele falowników (rozkład i role)",
+          "solar": "Prognoza słoneczna",
           "device_ips": "Adresy urządzeń",
           "diagnostics": "Logowanie, symulacja i dane testowe",
           "finish": "Zapisz i zamknij"
@@ -658,19 +660,19 @@
           "power_tolerance": "Tolerancja mocy urządzenia (W)",
           "manual_interval": "Interwał aktualizacji w trybie ręcznym (s)",
           "peak_limit": "Limit redukcji szczytów (W, 0 = wyłączony)",
-          "export_bias": "Margines eksportu podczas ładowania przy zmiennym zachmurzeniu (W, 0 = wyłączony)"
+          "export_bias": "Margines eksportu podczas ładowania przy zmiennym zachmurzeniu (W, 0 = wyłączony)",
+          "jump_w": "Wykrywanie szczytów: skok P1, który od razu uruchamia cykl (W, 0 = wył.)"
+        },
+        "data_description": {
+          "jump_w": "Jeśli pobór lub oddawanie wzrosły o tyle od ostatniego cyklu regulacji (czajnik lub płyta, która się włącza, albo wyłącza podczas rozładowywania baterii), następny cykl rusza od razu zamiast po szybkim interwale. Obciążenie narastające stopniowo jest wykrywane, gdy tylko przybędzie tyle mocy. Reakcja baterii nigdy nie liczy się jako skok."
         }
       },
       "slew": {
-        "title": "Slew rate i zmiana kierunku",
-        "description": "Ogranicza szybkość zmian żądanej mocy i przy przejściu między ładowaniem a rozładowaniem zawsze przechodzi przez 0 W (z krótką pauzą). Chroni to przekaźniki i falownik. Wartości są domyślne, a nie specyfikacją producenta. Urządzenie w gotowości na szczyty może startować szybciej ze stanu czuwania; zmiana kierunku zawsze używa normalnej szybkości. Zmiana kierunku następuje po 2 s, gdy urządzenie zgłosi 0 W, w przeciwnym razie po maksymalnej pauzie.",
+        "title": "Ochrona przy zmianie kierunku",
+        "description": "Falownik sam zwiększa i zmniejsza moc (około 250 W/s w SolarFlow 2400 AC+); integracja już tego nie ogranicza. Przejście między ładowaniem a rozładowaniem zawsze odbywa się przez potwierdzone 0 W i czeka co najmniej poniższe opóźnienie, jeśli 0 W nie jest potwierdzone. Uruchomiony falownik pracuje z małą mocą przez minimalny czas pracy, aby krótkie zakłócenie nie powodowało stukania przekaźnika.",
         "data": {
-          "slew_enabled": "Ogranicz szybkość zmian mocy",
-          "slew_up": "Maksymalny wzrost (W/s)",
-          "slew_down": "Maksymalny spadek (W/s)",
-          "flip_delay": "Maksymalna pauza przy 0 W podczas zmiany kierunku, bez potwierdzonego 0 W (s)",
-          "min_run": "Minimalny czas pracy uruchomionego urządzenia (s)",
-          "ready_rate": "Szybszy wzrost: start urządzenia w gotowości i urządzeń już pracujących w tym samym kierunku (W/s)"
+          "flip_delay": "Opóźnienie przy zmianie kierunku, gdy 0 W nie jest potwierdzone (s)",
+          "min_run": "Minimalny czas pracy uruchomionego urządzenia (s)"
         }
       },
       "lifetime": {
@@ -679,10 +681,14 @@
         "data": {
           "role_margin": "Margines zmiany roli (SoC %)",
           "fill_level": "Próg rozkładu (%)",
-          "flash_safe_state": "Zapisz stan bezpieczny (0 W) we flashu urządzenia"
+          "flash_safe_state": "Zapisz stan bezpieczny (0 W) we flashu urządzenia",
+          "sleep_after": "Usypiaj bezczynne falowniki po (min, 0 = wył.)",
+          "ready_hours": "Utrzymuj rozładowujący aktywny tylko w (godziny, np. 7-9,12-13,17-19)"
         },
         "data_description": {
-          "fill_level": "Obciążenie na falownik, zanim moc zostanie rozłożona na kolejny falownik; poniżej jest łączona na mniej. 85% przy 3 × 2400 W: 1 falownik do około 1900–2000 W. Przy szybko zmieniającym się zachmurzeniu stosowane jest 70%."
+          "fill_level": "Obciążenie na falownik, zanim moc zostanie rozłożona na kolejny falownik; poniżej jest łączona na mniej. 85% przy 3 × 2400 W: 1 falownik do około 1900–2000 W. Przy szybko zmieniającym się zachmurzeniu stosowane jest 70%.",
+          "sleep_after": "Bezczynny falownik Zendure zużywa około 30 W, dopóki czeka na polecenia (smartMode 1). Po tylu minutach przy 0 W zostaje uśpiony (smartMode 0, około 5 W); następne polecenie go budzi, co trwa około 1–2 s dłużej. Falownik z rolą rozładowania pozostaje aktywny na następny szczyt (zobacz godziny poniżej). 0 = zawsze aktywny. Symulacja ze stratami falowników: około 850 Wh dziennie mniej w listopadzie, 230 Wh latem.",
+          "ready_hours": "Przy włączonym usypianiu falownik z rolą rozładowania pozostaje aktywny, aby od razu pokryć następny szczyt. Tutaj można to ograniczyć do godzin z największą liczbą szczytów (czas lokalny, np. 7-9,12-13,17:30-19); poza nimi też może spać, a na początku takiej godziny zostaje wybudzony. Puste = zawsze aktywny. Symulacja ze stratami: około 120 Wh dziennie mniej w listopadzie."
         }
       },
       "device_ips": {
@@ -691,11 +697,12 @@
       },
       "diagnostics": {
         "title": "Logowanie, symulacja i dane testowe",
-        "description": "Opcje debugowania. Nagrywanie P1 zapisuje każdą wartość P1 (co sekundę przy bezpośrednio odczytywanym liczniku P1 HomeWizard) wraz z mocą baterii do <config>/zendure_ha/p1_<data>.csv jako dane testowe dla symulacji. Wyłącza się samo o północy.",
+        "description": "Opcje debugowania. Nagrywanie P1 zapisuje każdą wartość P1 (co sekundę przy bezpośrednio odczytywanym liczniku P1 HomeWizard) wraz z mocą baterii do <config>/zendure_ha/p1_<data>.csv jako dane testowe dla symulacji. Ze stanem regulacji każdy wiersz pokazuje też, co zrobił menedżer i każde urządzenie, a events_<data>.csv zawiera zmiany kierunku, polecenia, zmiany trybu i ostrzeżenia. Wyłącza się samo o północy; starsze dni są kompresowane.",
         "data": {
           "mqttlog": "Loguj komunikację MQTT",
           "simulation": "Tryb symulacji",
-          "p1_record": "Nagrywaj P1 co sekundę do północy (dane testowe)"
+          "p1_record": "Nagrywaj P1 co sekundę do północy (dane testowe)",
+          "p1_record_detail": "Nagrywaj też stan regulacji (tryb, nastawa, cykle, role i każde urządzenie; około 2,5 raza większy)"
         }
       },
       "p1_token": {
@@ -703,6 +710,13 @@
         "description": "Aby odczytywać licznik P1 pod adresem {host} przez API v2, potrzebny jest token. Naciśnij przycisk na liczniku P1 i kliknij Zatwierdź w ciągu 30 sekund.\n\nLub zaznacz API v1: licznik będzie wtedy odczytywany co sekundę przez lokalne API (włącz \"Lokalne API\" w aplikacji HomeWizard).",
         "data": {
           "use_v1": "Użyj API v1 (lokalne API) zamiast tokenu"
+        }
+      },
+      "solar": {
+        "title": "Prognoza słoneczna",
+        "description": "Opcjonalnie: czujnik z prognozą produkcji PV na dziś, np. sensor.solcast_pv_forecast_forecast_today (godziny od teraz są sumowane) lub sensor.solcast_pv_forecast_forecast_remaining_today. W dni, w które baterie się nie zapełnią, magazynują wtedy każdą Wh: margines oddawania przy zmiennym zachmurzeniu i ujemny cel P1 nie są używane. Gdy dziś nie oczekuje się już (prawie) słońca, falownik z rolą ładowania jest gotowy do rozładowania zamiast czekać na ładowanie. Pozostaw puste, aby wyłączyć.",
+        "data": {
+          "solar_forecast": "Czujnik prognozy słonecznej (kWh dziś)"
         }
       }
     },
@@ -719,7 +733,8 @@
       "invalid_address": "Wprowadź prawidłowy adres IP lub nazwę hosta.",
       "homewizard_press_button": "Licznik P1 nie dał jeszcze tokenu: naciśnij jego przycisk i kliknij Zatwierdź w ciągu 30 sekund.",
       "homewizard_unreachable": "Licznik P1 HomeWizard nie odpowiada pod tym adresem.",
-      "homewizard_v1_unreachable": "Licznik P1 nie odpowiada przez API v1: włącz \"Lokalne API\" w aplikacji HomeWizard."
+      "homewizard_v1_unreachable": "Licznik P1 nie odpowiada przez API v1: włącz \"Lokalne API\" w aplikacji HomeWizard.",
+      "invalid_hours": "Wpisz godziny jak 7-9,12-13,17:30-19 (od-do, oddzielone przecinkami)."
     }
   },
   "issues": {
@@ -738,6 +753,14 @@
     "zensdk_no_address": {
       "title": "Brak znanego adresu dla {name}",
       "description": "Chmura Zendure nie podała adresu IP dla {name}, więc integracja spróbowała utworzonej nazwy {address}, która nie odpowiada. Wprowadź adres IP urządzenia (aplikacja Zendure, informacje o urządzeniu, lub lista DHCP routera) w Konfiguruj, Adresy urządzeń. Zalecany jest stały adres DHCP. Do tego czasu urządzenie działa tylko z połączeniem ustawionym na chmurę."
+    },
+    "p1_stale": {
+      "title": "Licznik P1 nie wysyła wartości",
+      "description": "Od ponad minuty nie nadeszła żadna wartość P1. Baterie na razie utrzymują swoją moc; po 5 minutach wracają do obciążenia podstawowego z ostatnich 10 minut (tylko mniej, nigdy więcej), aby nie oddawać zgromadzonej energii do sieci ani nie ładować się z sieci. Sprawdź licznik P1, jego Wi-Fi i integrację HomeWizard. Problem zniknie, gdy wartości znów zaczną napływać."
+    },
+    "second_controller": {
+      "title": "Inny sterownik zmienia {devices}",
+      "description": "Limity mocy {devices} zostały w ciągu ostatnich 15 minut kilkakrotnie zmienione przez coś innego niż ta integracja: plan energetyczny lub tryb inteligentny w aplikacji Zendure, inną integrację lub automatyzację. Dwa sterowniki działają przeciwko sobie, co kosztuje energię i powoduje wiele dodatkowych poleceń. Wyłącz drugi. Problem zniknie po godzinie bez obcych zmian."
     }
   }
 }

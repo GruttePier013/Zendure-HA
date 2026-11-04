@@ -21,7 +21,7 @@ from homeassistant.const import EntityCategory
 from homeassistant.core import Event, EventStateChangedData, HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import issue_registry as ir
-from homeassistant.helpers.event import async_track_state_change_event
+from homeassistant.helpers.event import async_track_state_change_event, async_track_time_interval
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.loader import async_get_integration
 from homeassistant.util import dt as dt_util
@@ -32,24 +32,25 @@ from .const import (
     CONF_AUTO_MQTT_USER,
     CONF_DEVICE_IPS,
     CONF_FLASH_SAFE,
+    CONF_READY_HOURS,
+    CONF_SLEEP_AFTER,
     CONF_FLIP_DELAY,
     CONF_MANUAL_INTERVAL,
     CONF_MIN_RUN,
     CONF_P1_STDDEV_MIN,
     CONF_P1_HOMEWIZARD,
     CONF_P1_RECORD,
+    CONF_P1_RECORD_DETAIL,
     CONF_P1_TOKEN,
     CONF_P1METER,
     CONF_PEAK_LIMIT,
     CONF_POWER_START,
     CONF_POWER_TOLERANCE,
     CONF_EXPORT_BIAS,
+    CONF_JUMP,
+    CONF_SOLAR_FORECAST,
     CONF_FILL_LEVEL,
-    CONF_READY_RATE,
     CONF_ROLE_MARGIN,
-    CONF_SLEW_DOWN,
-    CONF_SLEW_ENABLED,
-    CONF_SLEW_UP,
     CONF_TIMEFAST,
     CONF_TIMEZERO,
     CONTROL_DEFAULTS,
@@ -62,16 +63,17 @@ from .const import (
 )
 from .device import DeviceSettings, ZendureDevice, ZendureLegacy, ZendureZenSdk
 from .p1direct import HomeWizardP1, homewizard_entry
+from . import events, solar
 from .p1record import P1Recorder
 from .discovery import SEARCH_INTERVAL, ZendureDiscovery, search_subnet
-from .dispatch import DEFAULT_ROLE_MARGIN, P1Tracker, RoleSelector, Volatility, peak_setpoint
+from .dispatch import DEFAULT_ROLE_MARGIN, ROLE_GUARD, P1Tracker, RoleSelector, Volatility, in_hours, parse_hours, peak_setpoint
 from .entity import EntityDevice, quiet
 from .fusegroup import FuseGroup
 from .number import ZendureRestoreNumber
 from .select import ZendureRestoreSelect, ZendureSelect
 from .sensor import ZendureSensor
 from .simlog import SimulationLog
-from .slew import DEFAULT_DOWN, DEFAULT_FLIP_DELAY, DEFAULT_MIN_RUN, DEFAULT_READY_UP, DEFAULT_UP
+from .slew import DEFAULT_FLIP_DELAY, DEFAULT_MIN_RUN, ZERO_BAND
 
 SCAN_INTERVAL = timedelta(seconds=60)
 
@@ -82,11 +84,26 @@ type ZendureConfigEntry = ConfigEntry[ZendureManager]
 
 # activity of a role holder, shown in the role sensors (in the language of Home Assistant)
 ACTIVITY_LABELS = {
-    "en": {"charging": "charging", "discharging": "discharging", "standby": "standby", "reserve": "standby, cloud reserve", "not_responding": "not responding"},
-    "nl": {"charging": "opladen", "discharging": "ontladen", "standby": "stand-by", "reserve": "stand-by, wolkenreserve", "not_responding": "reageert niet"},
-    "de": {"charging": "lädt", "discharging": "entlädt", "standby": "Standby", "reserve": "Standby, Wolkenreserve", "not_responding": "antwortet nicht"},
-    "fr": {"charging": "charge", "discharging": "décharge", "standby": "veille", "reserve": "veille, réserve nuages", "not_responding": "ne répond pas"},
-    "pl": {"charging": "ładuje", "discharging": "rozładowuje", "standby": "czuwanie", "reserve": "czuwanie, rezerwa chmur", "not_responding": "nie odpowiada"},
+    "en": {"charging": "charging", "discharging": "discharging", "standby": "standby", "reserve": "standby, cloud reserve", "sleeping": "asleep", "not_responding": "not responding"},
+    "nl": {"charging": "opladen", "discharging": "ontladen", "standby": "stand-by", "reserve": "stand-by, wolkenreserve", "sleeping": "slaapt", "not_responding": "reageert niet"},
+    "de": {"charging": "lädt", "discharging": "entlädt", "standby": "Standby", "reserve": "Standby, Wolkenreserve", "sleeping": "schläft", "not_responding": "antwortet nicht"},
+    "fr": {"charging": "charge", "discharging": "décharge", "standby": "veille", "reserve": "veille, réserve nuages", "sleeping": "en veille profonde", "not_responding": "ne répond pas"},
+    "pl": {"charging": "ładuje", "discharging": "rozładowuje", "standby": "czuwanie", "reserve": "czuwanie, rezerwa chmur", "sleeping": "uśpiony", "not_responding": "nie odpowiada"},
+}
+
+
+RESIDUAL_AGE = 5.0  # s: a small command on a standby device that is older than this is cleared
+TARGET_MAX = 200  # W: range of the P1 target
+TARGET_STEP = 5  # W
+
+SMART_MODES = (ManagerMode.MATCHING, ManagerMode.MATCHING_CHARGE, ManagerMode.MATCHING_DISCHARGE, ManagerMode.STORE_SOLAR)
+MODE_NAMES = {
+    ManagerMode.OFF: "off",
+    ManagerMode.MANUAL: "manual",
+    ManagerMode.MATCHING: "smart",
+    ManagerMode.MATCHING_DISCHARGE: "discharge",
+    ManagerMode.MATCHING_CHARGE: "charge",
+    ManagerMode.STORE_SOLAR: "store_solar",
 }
 
 
@@ -103,6 +120,34 @@ class ZendureManager(DataUpdateCoordinator[None], EntityDevice):
     last_cycle_error: str | None = None
     last_cycle_stuck: str | None = None  # where the last cycle that did not finish was waiting
     p1_values: int = 0  # P1 values handled since the start
+    _p1_stamps: deque | None = None  # monotonic times of the P1 values of the last minute (sensor p1_rate)
+    cycle_timeouts: int = 0  # control cycles stopped after CYCLE_TIMEOUT
+    last_cycle_ms: int = 0
+    last_setpoint: int = 0  # the dispatch setpoint of the last control cycle
+    fast_track_total: int = 0  # fast adjustments between two control cycles
+    stale_total: int = 0  # stale control episodes (watchdog)
+    p1_target: int = 0  # W, see p1_band
+    sleep_after: float = 0.0  # s at 0 W before an idle inverter may sleep; 0 = off
+    integration_version: str = "?"  # from the integration loader at setup (not read from manifest.json in the event loop)
+    ready_hours: list[tuple[float, float]] = []  # the discharger is kept awake only in these hours; [] = always
+    jump_ref: int = 0  # W: deviation from the target at the start of the last cycle (jump detection)
+    jump_pending: bool = False  # a jump came in while a cycle ran: the next P1 value starts a cycle
+    jump_split: int = 0  # W: the jump of this cycle, when it is large enough to start a second inverter (JUMP_SPLIT_W)
+    jump_total: int = 0
+    solar_sensor: str = ""  # CONF_SOLAR_FORECAST
+    solar_remaining: float | None = None  # kWh of sun still expected today
+    solar_fills: bool | None = None  # can that sun fill the batteries today? None = no forecast
+    sun_low: bool = False  # (almost) no more sun today: no inverter is kept ready to charge
+    p1_time: float | None = None  # monotonic time of the last P1 value
+    p1_stale: bool = False
+    _net_history: deque | None = None  # (monotonic time, net demand W) for the fall back without a P1 meter
+    _watch_unsub: Callable[[], None] | None = None
+    _record_states: dict[str, str] | None = None  # activity per device after the last finished cycle (recording)
+    p1_source: str = "sensor"  # ws_v2, v1 or sensor
+    p1_age_ms: int | None = None  # age of the P1 value when it was handled
+    _stale_since: datetime | None = None
+    _stale_mark: float = 0.0
+    _stale_warned = False
     _search_task: asyncio.Task | None = None
     crossflow_cycles: int = 0
     crossflow_since: datetime | None = None
@@ -189,6 +234,9 @@ class ZendureManager(DataUpdateCoordinator[None], EntityDevice):
         )
         self.operationstate = ZendureSensor(self, "operation_state")
         self.manualpower = ZendureRestoreNumber(self, "manual_power", self.update_manualpower, None, "W", "power", 12000, -12000, NumberMode.BOX, True)
+        # P1 target (W): 0 = zero at the meter; < 0 a band of a little export, > 0 of a little import (see p1_band)
+        self.p1Target = ZendureRestoreNumber(self, "p1_target", self.update_p1_target, None, "W", "power", TARGET_MAX, -TARGET_MAX, NumberMode.BOX, True)
+        self.p1Target._attr_native_step = TARGET_STEP  # noqa: SLF001
         self.availableKwh = ZendureSensor(self, "available_kwh", None, "kWh", "energy_storage", None, 1)
         self.totalKwh = ZendureSensor(self, "total_kwh", None, "kWh", "energy_storage", "measurement", 2)
         self.power = ZendureSensor(self, "power", None, "W", "power", "measurement", 0)
@@ -202,6 +250,8 @@ class ZendureManager(DataUpdateCoordinator[None], EntityDevice):
         self.lastCycle = ZendureSensor(self, "last_cycle", None, None, "timestamp", None, category=diag)
         self.p1Value = ZendureSensor(self, "p1_value", None, "W", "power", "measurement", 0, category=diag)
         self.dispatchSetpoint = ZendureSensor(self, "dispatch_setpoint", None, "W", "power", "measurement", 0, category=diag)
+        # P1 values received in the last minute (60 with a HomeWizard read every second); updated every 10 s
+        self.p1Rate = ZendureSensor(self, "p1_rate", None, "/min", None, "measurement", 0, state=0, category=diag, deadband=2)
         self.roleDischarge = ZendureSensor(self, "role_discharge", category=diag)
         self.roleCharge = ZendureSensor(self, "role_charge", category=diag)
         # updated every cycle: disabled by default, every state change is a row in the recorder database
@@ -210,7 +260,7 @@ class ZendureManager(DataUpdateCoordinator[None], EntityDevice):
         self.devicesCharging = ZendureSensor(self, "devices_charging", None, None, None, "measurement", 0, state=0, category=diag)
         self.devicesDischarging = ZendureSensor(self, "devices_discharging", None, None, None, "measurement", 0, state=0, category=diag)
         self.devicesIdle = ZendureSensor(self, "devices_idle", None, None, None, "measurement", 0, state=0, category=diag)
-        self.devicesRamping = ZendureSensor(self, "devices_ramping", None, None, None, "measurement", 0, state=0, category=diag)
+        self.devicesSleep = ZendureSensor(self, "devices_sleep", None, None, None, "measurement", 0, state=0, category=diag)
         self.devicesNotResponding = ZendureSensor(self, "devices_not_responding", None, None, None, "measurement", 0, state=0, category=diag)
         self.mqttCloudConnected = ZendureBinarySensor(self, "mqtt_cloud", None, "connectivity", category=diag)
         self.cloudMode = ZendureBinarySensor(self, "cloud_mode", None, None, category=diag)
@@ -269,6 +319,8 @@ class ZendureManager(DataUpdateCoordinator[None], EntityDevice):
         # mDNS discovery keeps the address of zenSDK devices up to date (a manual address always wins)
         self.discovery = ZendureDiscovery(self.hass, self._discovered, lambda: {d.snNumber: d.name for d in self.devices if isinstance(d, ZendureZenSdk)})
         await self.discovery.async_start()
+        # P1 meter watch (no values any more) and foreign writes, every 10 s
+        self._watch_unsub = async_track_time_interval(self.hass, self._watch, timedelta(seconds=10), cancel_on_shutdown=True)
 
         # initialize the api & p1 meter
         self.api.Init(self.config_entry.data, mqtt)
@@ -369,8 +421,19 @@ class ZendureManager(DataUpdateCoordinator[None], EntityDevice):
     async def update_operation(self, entity: ZendureSelect, _operation: Any) -> None:
         operation = ManagerMode(entity.value)
         _LOGGER.info("Update operation: %s from: %s", operation, self.operation)
+        if getattr(self, "operation", None) != operation:
+            events.emit("mode_change", "", **{"from": MODE_NAMES.get(getattr(self, "operation", None), "-"), "to": MODE_NAMES[operation]})
 
+        previous = getattr(self, "operation", None)
         self.operation = operation
+        if getattr(self, "zero_fast", None) is not None and self.zero_fast != datetime.max:
+            # the next P1 value starts a cycle at once (seen: 11 s without a cycle after off -> smart)
+            self.zero_next = self.zero_fast = datetime.min
+        if operation in SMART_MODES and previous not in SMART_MODES and self._charging_now():
+            # manual mode charges without the charge delay, so the delay still reads "never started": the first smart
+            # cycle would stop the charging, wait for the delay (2 s, or 60 s after earlier charging) and start again
+            # (3 November: manual -6000 W -> smart gave 0 W, a little charging, 0 W, charging). It already charges.
+            self.charge_time = self.charge_last = datetime.now()
         if self.p1meterEvent is not None:
             if operation != ManagerMode.OFF and (len(self.devices) == 0 or all(not d.online for d in self.devices)):
                 # The mode is kept: at startup Home Assistant restores it before the devices are online,
@@ -382,11 +445,69 @@ class ZendureManager(DataUpdateCoordinator[None], EntityDevice):
 
             match self.operation:
                 case ManagerMode.OFF:
-                    await self.ramp_off()
+                    await self.stop_all()
 
                 case ManagerMode.MANUAL:
                     # do not wait for the next P1 change, apply the manual power right away
                     await self.dispatch_manual()
+
+                case _ if previous != operation:
+                    # a smart mode: run the first cycle now with the last P1 value when it is fresh (HomeWizard
+                    # every second); otherwise the next P1 value starts it (zero_next / zero_fast are reset above)
+                    await self._dispatch_smart_now()
+
+    def _charging_now(self) -> bool:
+        """True when a device charges (measured or commanded)."""
+        return any(
+            getattr(d, "homeInput", None) is not None and d.homeInput.asInt > SmartMode.POWER_TOLERANCE or d.slew.current <= -ZERO_BAND
+            for d in getattr(self, "devices", [])
+        )
+
+    async def _dispatch_smart_now(self) -> None:
+        p1_time = getattr(self, "p1_time", None)
+        if p1_time is None or monotonic() - p1_time > SmartMode.P1_FRESH or self.zero_fast == datetime.max:
+            return
+        if getattr(self, "hass", None) is None or not self.hass.is_running:
+            return
+        await self._run_power_update(self.p1_last, True, datetime.now())
+
+    async def update_p1_target(self, _entity: ZendureRestoreNumber, value: Any) -> None:
+        """A new P1 target (band) from the configuration entity."""
+        try:
+            target = int(round(float(value) / TARGET_STEP) * TARGET_STEP)
+        except (TypeError, ValueError):
+            return
+        target = max(-TARGET_MAX, min(TARGET_MAX, target))
+        if target != self.p1_target:
+            events.emit("target_change", "", **{"from": self.p1_target, "to": target})
+            _LOGGER.info("P1 target %s W (was %s W)", target, self.p1_target)
+        self.p1_target = target
+
+    def p1_band(self, p1: int) -> int:
+        """The P1 value the control works with, for the P1 target band.
+
+        Target 0: P1 itself (zero at the meter). Target T < 0 (a little export allowed): while the batteries
+        charge or are idle, everything between T W export and 0 W is fine and is not corrected (fewer commands,
+        room for small changes, the sun is not stored a few W less); outside that band the control steers to T,
+        import is corrected at once. While the batteries discharge, the band does not apply: there it would
+        send stored energy to the grid (simulated: twice the export for a little less import), so they aim at
+        0 W as before. The target never starts a device by itself: a discharger is only started by real import.
+        Target T > 0 (a little import allowed) is the mirror: the band applies while discharging or idle.
+        """
+        target = self.p1_target
+        if target < 0 and self.solar_fills is False:
+            target = 0  # the batteries will not be full today: no export on purpose (solar forecast)
+        if target == 0:
+            return p1
+        discharging = any(d.slew.current >= ZERO_BAND for d in self.devices)
+        charging = any(d.slew.current <= -ZERO_BAND for d in self.devices)
+        if (target < 0 and discharging and not charging) or (target > 0 and charging and not discharging):
+            return p1  # the band would cost stored energy (or buy energy to store): zero at the meter
+        if min(target, 0) <= p1 <= max(target, 0):
+            return 0  # inside the band: no correction
+        if (target < 0 < p1) or (target > 0 > p1):
+            return p1  # on the other side of 0 W: correct to 0 W, never start a device to create the band
+        return p1 - target
 
     async def update_manualpower(self, _entity: ZendureRestoreNumber, _value: Any) -> None:
         """Apply a changed manual power value immediately when the manager is in manual mode."""
@@ -498,19 +619,51 @@ class ZendureManager(DataUpdateCoordinator[None], EntityDevice):
 
         self.simlog.add(f"{time};{p1};{self.operation};{tbattery};{tsolar};{thome};{self.manualpower.asNumber};" + data + "\n", header)
 
-    def _update_p1_record(self, day: str) -> None:
+    def _update_p1_record(self, day: str, detail: bool = True) -> None:
         """Start or stop the P1 recording: it runs while the stored date is today."""
         today = dt_util.now().date().isoformat()
         if day and day != today and getattr(self, "config_entry", None) is not None and self.config_entry.data.get(CONF_P1_RECORD) == day:
             # Home Assistant was not running at midnight: switch the recording of that day off now
             self.hass.config_entries.async_update_entry(self.config_entry, data={**self.config_entry.data, CONF_P1_RECORD: ""})
         if day == today:
+            if self.p1record is not None and self.p1record.detail != detail:
+                recorder, self.p1record = self.p1record, None  # other format: continue in a new file
+                self.hass.async_create_task(recorder.stop())
             if self.p1record is None:
-                self.p1record = P1Recorder(self.hass, self._p1_record_done)
+                self.p1record = P1Recorder(self.hass, self._p1_record_done, len(self.devices), detail, self._record_meta)
                 self.p1record.start()
         elif self.p1record is not None:
             recorder, self.p1record = self.p1record, None
             self.hass.async_create_task(recorder.stop())
+
+    def _record_meta(self) -> dict[str, Any] | None:
+        """Versions, devices and settings for the meta file of a recording (no serial numbers, tokens or passwords).
+
+        None while the devices are still loading (no capacity known yet): an entry with kWh 0 and the default limits
+        was written at every restart before 1.6.5.
+        """
+        if not self.devices or any(not d.kWh for d in self.devices):
+            return None
+        from homeassistant.const import __version__ as ha_version
+
+        from .const import CONTROL_DEFAULTS
+
+        data = dict(self.config_entry.data) if getattr(self, "config_entry", None) is not None else {}
+        secret = ("token", "psw", "password", "user", "wifissid", "device_ips", "p1_homewizard")
+        settings = {k: v for k, v in sorted(data.items()) if not any(x in k for x in secret)}
+        return {
+            "integration_version": self.integration_version,
+            "home_assistant": ha_version,
+            "time_zone": str(self.hass.config.time_zone),
+            "p1_source": self.p1_source if self.p1direct is not None else "sensor",
+            "devices": [
+                {"column": f"d{i}", "name": d.name, "model": getattr(d, "model", ""), "charge_limit": d.charge_limit, "discharge_limit": d.discharge_limit, "kwh": d.kWh}
+                for i, d in enumerate(self.devices, 1)
+            ],
+            "fuse_groups": [{"name": fg.name, "devices": [d.name for d in fg.devices]} for fg in getattr(self, "fuseGroups", [])],
+            "settings": settings,
+            "defaults": {k: v for k, v in CONTROL_DEFAULTS.items() if k not in settings},
+        }
 
     def _p1_record_done(self) -> None:
         """Midnight: the recording switches itself off."""
@@ -525,10 +678,11 @@ class ZendureManager(DataUpdateCoordinator[None], EntityDevice):
             self.hass.config_entries.async_update_entry(self.config_entry, data={**self.config_entry.data, CONF_P1_HOMEWIZARD: host})
         return host
 
-    async def _p1_direct(self, p1: int) -> None:
+    async def _p1_direct(self, p1: int, age_ms: int | None = None) -> None:
         """A value read directly from the HomeWizard P1 meter (every second)."""
         if self.hass.is_running and not self.hass.is_stopping:
-            await self._handle_p1(p1, "homewizard")
+            source = "ws_v2" if self.p1direct is not None and self.p1direct.token else "v1"
+            await self._handle_p1(p1, source, age_ms)
 
     async def _p1_changed(self, event: Event[EventStateChangedData]) -> None:
         # exit if there is nothing to do
@@ -545,14 +699,32 @@ class ZendureManager(DataUpdateCoordinator[None], EntityDevice):
             p1 = int(self.p1_factor * float(new_state.state))
         except ValueError:
             return
-        await self._handle_p1(p1, "sensor")
+        reported = getattr(new_state, "last_reported", None) or getattr(new_state, "last_updated", None)
+        age = int((dt_util.utcnow() - reported).total_seconds() * 1000) if isinstance(reported, datetime) else None
+        await self._handle_p1(p1, "sensor", age)
 
-    async def _handle_p1(self, p1: int, source: str = "sensor") -> None:
+    async def _handle_p1(self, p1: int, source: str = "sensor", age_ms: int | None = None) -> None:
         """Process one P1 value (W, positive = import), from the sensor or read directly from the meter."""
         self.p1_last = p1
         self.p1_values += 1
+        now = monotonic()
+        if self._p1_stamps is None:
+            self._p1_stamps = deque()
+        self._p1_stamps.append(now)
+        self.p1_time = now
+        if self.p1_stale:
+            self._p1_back()
+        if self._net_history is None:
+            self._net_history = deque()
+        self._net_history.append((now, p1 + sum(d.homeOutput.asInt - d.homeInput.asInt for d in self.devices)))
+        while self._net_history and now - self._net_history[0][0] > SmartMode.P1_HISTORY:
+            self._net_history.popleft()
+        self.p1_source = source
+        self.p1_age_ms = age_ms
         if self.p1record is not None:
-            self.p1record.add(p1, sum(d.homeOutput.asInt - d.homeInput.asInt for d in self.devices), source)
+            battery = sum(d.homeOutput.asInt - d.homeInput.asInt for d in self.devices)
+            self.p1record.add(p1, battery, "homewizard" if source in ("ws_v2", "v1") else source, self.record_columns(p1, battery) if self.p1record.detail else None)
+        await self._watch_stale(p1)
 
         # Get time & update simulation
         time = datetime.now()
@@ -564,10 +736,119 @@ class ZendureManager(DataUpdateCoordinator[None], EntityDevice):
         if self.operation in (ManagerMode.MANUAL, ManagerMode.OFF):
             isFast = False
             run = run and time > self.zero_next
+        elif not run and self.jump_check(p1, time):
+            run = isFast = True  # a big jump: do not wait for the end of the fast window
         if run:
             await self._run_power_update(p1, isFast, time)
         else:
             await self.fast_track(p1, time)
+
+    # ------------------------------------------------------------------------------------------
+    # recording columns and the stale control watchdog
+    # ------------------------------------------------------------------------------------------
+    def record_columns(self, p1: int, battery: int) -> list[Any]:
+        """The extra columns of the P1 recording (see p1record.manager_header / device_header), in that order."""
+        names = {d.deviceId: d.name for d in self.devices}
+        delay = 0.0
+        if getattr(self, "charge_time", datetime.max) not in (datetime.max, None):
+            delay = max(0.0, (self.charge_time - datetime.now()).total_seconds())
+        row: list[Any] = [
+            MODE_NAMES.get(getattr(self, "operation", None), "-"),
+            self.last_setpoint,
+            p1 + battery,
+            "" if self.p1_age_ms is None else self.p1_age_ms,
+            self.p1_source,
+            1 if self.cloud_mode else 0,
+            self.fast_track_total,
+            round(delay, 1),
+            self.cycle_total,
+            1 if getattr(self, "zero_fast", None) == datetime.max else 0,
+            self.last_cycle_ms,
+            self.cycle_errors - self.cycle_timeouts,
+            self.cycle_timeouts,
+            names.get(getattr(self.roles, "discharger", None), "") if hasattr(self, "roles") else "",
+            names.get(getattr(self.roles, "charger", None), "") if hasattr(self, "roles") else "",
+            self.p1_target,
+        ]
+        running = getattr(self, "zero_fast", None) == datetime.max  # the lists are rebuilt while a cycle runs
+        for d in self.devices:
+            if running and self._record_states is not None and d.deviceId in self._record_states:
+                state = self._record_states[d.deviceId]
+            else:
+                state = self._activity(d)
+            state = "offline" if d.state == DeviceState.OFFLINE else state
+            row += [d.electricLevel.asInt, "offline" if state == "not_responding" else state, d.homeOutput.asInt - d.homeInput.asInt, d.slew.current, 1 if d.slew.pending else 0]
+        return row
+
+    def _events_context(self) -> dict[str, Any]:
+        roles = {}
+        if hasattr(self, "roles"):
+            for d in self.devices:
+                roles[d.name] = "discharge" if d.deviceId == self.roles.discharger else "charge" if d.deviceId == self.roles.charger else "none"
+        return {"mode": MODE_NAMES.get(getattr(self, "operation", None), "-"), "setpoint": self.last_setpoint, "role": roles}
+
+    async def _watch_stale(self, p1: int) -> None:
+        """Watchdog: import or export of more than STALE_POWER W for STALE_AFTER s while nothing happens.
+
+        Nothing happens means: no new command to any device, no change of direction going on, no command
+        held back, and at least one device could still act (not all full or empty, not offline). That should not
+        occur; it is logged once per episode with the state of the control, and one control cycle is forced.
+        """
+        if self.operation not in (ManagerMode.MATCHING, ManagerMode.MATCHING_CHARGE, ManagerMode.MATCHING_DISCHARGE, ManagerMode.STORE_SOLAR):
+            self._stale_since = None
+            return
+        now = datetime.now()
+        last_command = max((getattr(d, "command_time", float("-inf")) for d in self.devices), default=float("-inf"))
+        busy = any(getattr(d, "dir_change", None) is not None or d.slew.pending for d in self.devices)
+        if p1 > 0:
+            able = [d for d in self.devices if d.state not in (DeviceState.OFFLINE, DeviceState.SOCEMPTY)]
+            if self.operation in (ManagerMode.MATCHING_CHARGE, ManagerMode.STORE_SOLAR):
+                # discharging is not allowed: a charging device should stop, otherwise nothing to do
+                able = [d for d in self.devices if d.slew.current < 0]
+        else:
+            able = [d for d in self.devices if d.state not in (DeviceState.OFFLINE, DeviceState.SOCFULL)]
+            if self.operation == ManagerMode.MATCHING_DISCHARGE:
+                able = [d for d in self.devices if d.slew.current > 0]
+        if abs(p1) <= SmartMode.STALE_POWER or busy or not able or (self._stale_since is not None and last_command > self._stale_mark):
+            self._stale_since = None
+            self._stale_warned = False
+            return
+        if self._stale_since is None:
+            self._stale_since = now
+            self._stale_mark = monotonic()
+            return
+        if self._stale_warned or (now - self._stale_since).total_seconds() < SmartMode.STALE_AFTER:
+            return
+        self._stale_warned = True
+        dump = self._state_dump()
+        if p1 < 0 and getattr(self, "charge_time", datetime.max) not in (datetime.max, None) and self.charge_time > now:
+            # explained: the charge delay (1.4.4 "hysteria") holds the charging back on purpose
+            events.emit("stale_control", "", p1=p1, seconds=round((now - self._stale_since).total_seconds()), explained="charge_delay", state=dump)
+            return
+        self.stale_total += 1
+        _LOGGER.warning("No control for %s s at P1 %s W: %s. A control cycle is forced.", SmartMode.STALE_AFTER, p1, dump)
+        events.emit("stale_control", "", p1=p1, seconds=round((now - self._stale_since).total_seconds()), state=dump)
+        if self.zero_fast != datetime.max:
+            await self._run_power_update(p1, True, now)
+
+    def _state_dump(self) -> str:
+        """Short state of the control, for the log of the watchdog."""
+        delay = ""
+        if getattr(self, "charge_time", datetime.max) != datetime.max:
+            delay = f"charge delay {max(0, round((self.charge_time - datetime.now()).total_seconds()))} s, "
+        parts = [
+            f"mode {MODE_NAMES.get(self.operation, '-')}",
+            f"setpoint {self.last_setpoint} W",
+            f"{delay}cycles {self.cycle_total} (running {self.zero_fast == datetime.max})",
+            f"cloud {'on' if self.cloud_mode else 'off'}",
+        ]
+        for d in self.devices:
+            parts.append(
+                f"{d.name}: {self._activity(d)} {d.homeOutput.asInt - d.homeInput.asInt} W, command {d.slew.current} W, "
+                f"SoC {d.electricLevel.asInt}%, {d.state.name}, flip released {d.slew.flip_released()}, run since "
+                f"{'-' if d.slew._run_start is None else round(monotonic() - d.slew._run_start)} s"  # noqa: SLF001
+            )
+        return "; ".join(parts)
 
     async def _run_power_update(self, p1: int, isFast: bool, time: datetime) -> None:
         """Reset the distribution state and run one power update."""
@@ -598,33 +879,51 @@ class ZendureManager(DataUpdateCoordinator[None], EntityDevice):
             try:
                 async with asyncio.timeout(SmartMode.CYCLE_TIMEOUT):
                     await self.powerChanged(p1, isFast, time)
+                    await self._clear_residual()
+                    await self._sleep_idle(time)
+                self._record_states = {d.deviceId: self._activity(d) for d in self.devices}
             finally:
                 if watchdog is not None:
                     watchdog.cancel()
         except TimeoutError:
             self.cycle_errors += 1
+            self.cycle_timeouts += 1
             self.last_cycle_error = f"{dt_util.now().isoformat(timespec='seconds')}: cycle did not finish within {SmartMode.CYCLE_TIMEOUT} s"
+            events.emit("cycle_timeout", "", waiting_in=self.last_cycle_stuck)
         except Exception as err:
             self.cycle_errors += 1
             self.last_cycle_error = f"{dt_util.now().isoformat(timespec='seconds')}: {type(err).__name__}: {err}"
+            events.emit("cycle_error", "", error=f"{type(err).__name__}: {err}"[:120])
             _LOGGER.error("Control cycle failed: %s\n%s", err, traceback.format_exc())
         finally:
             # always release the update lock, also when the task is cancelled
-            ramping = sum(1 for d in self.devices if d.slew.pending)
             time = datetime.now()
             zero, fast = self.cadence()
             self.zero_next = time + timedelta(seconds=zero)
             self.zero_fast = time + timedelta(seconds=fast)
+            if self.jump_pending:
+                # a jump came in during this cycle: the next P1 value starts the next cycle
+                self.jump_pending = False
+                self.zero_next = self.zero_fast = datetime.min
 
         # diagnostics
-        self.cycleDuration.update_value(round((perf_counter() - started) * 1000))
+        self.last_cycle_ms = round((perf_counter() - started) * 1000)
+        self.cycleDuration.update_value(self.last_cycle_ms)
         if previous is not None:
             self.cycleInterval.update_value(round((self.last_cycle - previous).total_seconds(), 1))
         self.cycle_total += 1
+        if self.cycle_total == 1 and self.p1record is not None:
+            self.hass.async_create_task(self.p1record.update_meta())  # the devices are known now
+        self.cycleCount._attr_extra_state_attributes = {  # noqa: SLF001
+            "cycle_errors": self.cycle_errors - self.cycle_timeouts,
+            "cycle_timeouts": self.cycle_timeouts,
+            "direction_slow": events.counters["dir_slow"],
+            "stale_control": self.stale_total,
+            "p1_jumps": self.jump_total,
+        }
         self.cycleCount.update_value(self.cycle_total)
         self.lastCycle.update_value(dt_util.now())
         self.p1Value.update_value(p1)
-        self.devicesRamping.update_value(ramping)
         if self.followup_needed(p1):
             self._schedule_followup()
 
@@ -636,6 +935,146 @@ class ZendureManager(DataUpdateCoordinator[None], EntityDevice):
             SmartMode.CYCLE_TIMEOUT,
             self.last_cycle_stuck,
         )
+
+    async def _sleep_idle(self, time: datetime | None = None) -> None:
+        """Let idle inverters sleep after ``sleep_after`` s at 0 W.
+
+        The one with the discharge role stays awake for the next peak, with ready hours only in those hours (1.6.3);
+        at the start of such an hour a sleeping discharger is woken, so it is ready again.
+        """
+        if self.sleep_after <= 0 or self.operation not in (ManagerMode.MATCHING, ManagerMode.MATCHING_CHARGE, ManagerMode.MATCHING_DISCHARGE, ManagerMode.STORE_SOLAR):
+            return
+        discharger = getattr(self.roles, "discharger", None)
+        ready = in_hours(self.ready_hours, time or datetime.now())
+        for d in self.idle:
+            if ready and self.ready_hours and d.deviceId == discharger and getattr(d, "asleep", False) and hasattr(d, "wake"):
+                await d.wake()  # a ready hour started: the discharger is ready for the next peak again
+                continue
+            awake = (discharger if ready else None, self.cloud_reserve)  # ready for the next peak / cloud gap
+            if getattr(d, "asleep", True) or d.deviceId in awake or d.slew.pending or not d.slew.at_zero_for(self.sleep_after):
+                continue
+            if monotonic() - getattr(d, "command_time", -1e9) < self.sleep_after:
+                continue  # also no command (not even 0 W, which sets smartMode 1 again) for that long
+            await d.sleep()
+
+    async def _watch(self, _now: Any = None) -> None:
+        """Every 10 s: the P1 rate, a P1 meter that sends nothing any more, and repair issues for writes of someone else."""
+        self._update_p1_rate()
+        self._update_solar()
+        self._check_foreign_issue()
+        if self.operation not in (ManagerMode.MATCHING, ManagerMode.MATCHING_CHARGE, ManagerMode.MATCHING_DISCHARGE, ManagerMode.STORE_SOLAR):
+            return
+        if self.p1_time is None:
+            return
+        silent = monotonic() - self.p1_time
+        if silent >= SmartMode.P1_STALE_WARN and not self.p1_stale:
+            self.p1_stale = True
+            _LOGGER.warning("No P1 value for %s s: the batteries keep their power; after %s s they fall back to the base load", int(silent), int(SmartMode.P1_STALE_BASE))
+            events.emit("p1_stale", "", seconds=int(silent))
+            ir.async_create_issue(self.hass, DOMAIN, "p1_stale", is_fixable=False, severity=ir.IssueSeverity.WARNING, translation_key="p1_stale")
+        if silent >= SmartMode.P1_STALE_BASE and self.zero_fast != datetime.max:
+            await self._p1_fallback()
+
+    def p1_rate(self, now: float | None = None) -> int:
+        """Number of P1 values received in the last 60 s."""
+        stamps = self._p1_stamps
+        if not stamps:
+            return 0
+        now = monotonic() if now is None else now
+        while stamps and now - stamps[0] > 60:
+            stamps.popleft()
+        return len(stamps)
+
+    def _update_solar(self) -> None:
+        """Read the solar forecast: will the batteries be full today, is there still sun to come (every 10 s)."""
+        state = self.hass.states.get(self.solar_sensor) if self.solar_sensor and getattr(self, "hass", None) is not None else None
+        now = dt_util.now()
+        remaining = solar.remaining_kwh(state, now)
+        if remaining is None:
+            fills, low = None, False
+        else:
+            room = sum(max(0.0, (d.socSet.asNumber - d.electricLevel.asNumber) / 100 * d.kWh * 1000) for d in self.devices if d.online)
+            fills = solar.batteries_fill(remaining, solar.hours_to_sunset(self.hass.states.get("sun.sun"), now), room)
+            low = remaining < solar.SUN_LOW_KWH
+        if (fills, low) != (self.solar_fills, self.sun_low):
+            events.emit("solar", "", remaining_kwh=remaining, fills=fills, sun_low=low)
+            _LOGGER.info("Solar forecast: %s kWh still expected today, batteries full today: %s, no more sun: %s", remaining, fills, low)
+        self.solar_remaining, self.solar_fills, self.sun_low = remaining, fills, low
+
+    def _update_p1_rate(self) -> None:
+        sensor = getattr(self, "p1Rate", None)
+        if sensor is None:
+            return
+        sensor._attr_extra_state_attributes = {"source": getattr(self, "p1_source", None)}  # noqa: SLF001
+        sensor.update_value(self.p1_rate())
+
+    def _p1_back(self) -> None:
+        self.p1_stale = False
+        _LOGGER.info("P1 values arrive again")
+        events.emit("p1_back", "")
+        ir.async_delete_issue(self.hass, DOMAIN, "p1_stale")
+
+    def fallback_goal(self, total: int) -> int:
+        """Battery power to keep without a P1 meter: never more than the house surely needed (or the sun surely gave).
+
+        Discharging: at most the net demand that was exceeded 90 % of the time in the last 10 minutes.
+        Charging: at most the surplus that was there 90 % of the time. Only ever less than now, never a start.
+        """
+        values = sorted(v for _, v in (self._net_history or []))
+        if not values:
+            return 0
+        if total > 0:
+            return min(total, max(0, values[(len(values) - 1) // 10]))
+        if total < 0:
+            return max(total, min(0, values[(len(values) - 1) * 9 // 10]))
+        return 0
+
+    async def _p1_fallback(self) -> None:
+        running = [d for d in self.devices if abs(d.slew.current) >= ZERO_BAND]
+        total = sum(d.slew.current for d in running)
+        if not running or total == 0:
+            return
+        goal = self.fallback_goal(total)
+        if abs(goal - total) < SmartMode.POWER_TOLERANCE:
+            return
+        events.emit("p1_fallback", "", total=total, goal=goal)
+        for d in running:
+            share = int(goal * d.slew.current / total)
+            await (d.power_discharge(share) if share >= 0 else d.power_charge(share))
+
+    def _check_foreign_issue(self) -> None:
+        now = monotonic()
+        recent = [d.name for d in self.devices if len([t for t in getattr(d, "foreign_writes", []) if now - t < SmartMode.FOREIGN_WINDOW]) >= SmartMode.FOREIGN_COUNT]
+        quiet = all(now - max(getattr(d, "foreign_writes", [-1e9]) or [-1e9]) > SmartMode.FOREIGN_CLEAR for d in self.devices)
+        if recent and not getattr(self, "_foreign_issue", False):
+            self._foreign_issue = True
+            ir.async_create_issue(
+                self.hass, DOMAIN, "second_controller", is_fixable=False, severity=ir.IssueSeverity.WARNING,
+                translation_key="second_controller", translation_placeholders={"devices": ", ".join(recent)},
+            )  # fmt: skip
+        elif quiet and getattr(self, "_foreign_issue", False):
+            self._foreign_issue = False
+            ir.async_delete_issue(self.hass, DOMAIN, "second_controller")
+
+    async def _clear_residual(self) -> None:
+        """Send 0 W to a standby device that still has a small command (below POWER_START).
+
+        After a hand-over a device can be left with a few W (seen: 19 W for 37 minutes). It reports 0 W, so it
+        counts as standby and gets no new command; the limiter still thinks it runs. Then a start in the
+        other direction waits for a change of direction, and the device keeps that limit.
+        """
+        now = monotonic()
+        for d in self.idle:
+            current = d.slew.current
+            if ZERO_BAND <= abs(current) < SmartMode.POWER_START and not d.slew.pending and now - getattr(d, "command_time", now) > RESIDUAL_AGE:
+                _LOGGER.debug("Clear the residual command of %s (%s W)", d.name, current)
+                if current > 0:
+                    await d.power_discharge(0)
+                else:
+                    await d.power_charge(0)
+                # the stop falls within the power tolerance of the measured 0 W, so it is not sent: send it now
+                if d.slew.current == 0 and (d.limitOutput.asInt > 0 or d.limitInput.asInt > 0):
+                    await (d.discharge(0) if current > 0 else d.charge(0))
 
     def cadence(self) -> tuple[float, float]:
         """(normal, fast) update interval in seconds for the current operation.
@@ -733,6 +1172,9 @@ class ZendureManager(DataUpdateCoordinator[None], EntityDevice):
     async def async_shutdown_manager(self) -> None:
         """Stop timers and background tasks when the integration is unloaded."""
         self.cancel_followup()
+        if self._watch_unsub is not None:
+            self._watch_unsub()
+            self._watch_unsub = None
         if self._search_task is not None:
             self._search_task.cancel()
             self._search_task = None
@@ -742,6 +1184,7 @@ class ZendureManager(DataUpdateCoordinator[None], EntityDevice):
         if self.p1record is not None:
             await self.p1record.stop()
             self.p1record = None
+        events.reset()
         if self.discovery is not None:
             await self.discovery.async_stop()
             self.discovery = None
@@ -764,33 +1207,36 @@ class ZendureManager(DataUpdateCoordinator[None], EntityDevice):
         self.roles.margin = self.role_margin
         self.fill_level = min(100, max(20, int(data.get(CONF_FILL_LEVEL, CONTROL_DEFAULTS[CONF_FILL_LEVEL]))))
         self.export_bias = max(0, int(data.get(CONF_EXPORT_BIAS, CONTROL_DEFAULTS[CONF_EXPORT_BIAS])))
-        self._update_p1_record(str(data.get(CONF_P1_RECORD) or ""))
+        SmartMode.JUMP_W = max(0, int(data.get(CONF_JUMP, CONTROL_DEFAULTS[CONF_JUMP])))
+        self.solar_sensor = str(data.get(CONF_SOLAR_FORECAST) or "")
+        if not self.solar_sensor:
+            self.solar_remaining, self.solar_fills, self.sun_low = None, None, False
+        self.sleep_after = max(0.0, float(data.get(CONF_SLEEP_AFTER, CONTROL_DEFAULTS[CONF_SLEEP_AFTER]))) * 60
+        try:
+            self.ready_hours = parse_hours(str(data.get(CONF_READY_HOURS) or ""))
+        except ValueError:
+            self.ready_hours = []
+        self._update_p1_record(str(data.get(CONF_P1_RECORD) or ""), bool(data.get(CONF_P1_RECORD_DETAIL, True)))
+        if self.p1record is not None and getattr(self, "hass", None) is not None:
+            self.hass.async_create_task(self.p1record.update_meta())
+        if getattr(self, "hass", None) is not None:
+            events.set_context(self._events_context)
 
         # manual addresses of zenSDK devices (serial number -> address); an empty value uses the cloud / discovery address
         self._ip_overrides = {sn: str(ip).strip() for sn, ip in (data.get(CONF_DEVICE_IPS) or {}).items() if str(ip).strip()}
         for d in self.devices:
-            d.configure_slew(
-                bool(data.get(CONF_SLEW_ENABLED, True)),
-                float(data.get(CONF_SLEW_UP, DEFAULT_UP)),
-                float(data.get(CONF_SLEW_DOWN, DEFAULT_DOWN)),
-                float(data.get(CONF_FLIP_DELAY, DEFAULT_FLIP_DELAY)),
-                float(data.get(CONF_MIN_RUN, DEFAULT_MIN_RUN)),
-                float(data.get(CONF_READY_RATE, DEFAULT_READY_UP)),
-            )
+            d.configure_slew(float(data.get(CONF_FLIP_DELAY, DEFAULT_FLIP_DELAY)), float(data.get(CONF_MIN_RUN, DEFAULT_MIN_RUN)))
             d.persist_safe_state = bool(data.get(CONF_FLASH_SAFE, True))
             if isinstance(d, ZendureZenSdk) and (ip := self._ip_overrides.get(d.snNumber)):
                 d.set_address(ip, "manual")
 
-    async def ramp_off(self) -> None:
-        """Ramp all devices down to 0 W (slew limited) and switch them off."""
-        ramping = False
+    async def stop_all(self) -> None:
+        """Switch all devices off (to 0 W); the inverters ramp down by themselves."""
         for d in self.devices:
-            ramping |= await d.power_off_ramped()
-        if ramping:
-            self._schedule_followup()
+            await d.stop()
 
     def _schedule_followup(self) -> None:
-        """Continue a ramp without waiting for the next P1 change."""
+        """Continue a held back command without waiting for the next P1 change."""
         if self._followup is None and self.hass.is_running:
             self._followup = self.hass.loop.call_later(SmartMode.RAMP_INTERVAL, self._followup_fire)
 
@@ -800,7 +1246,7 @@ class ZendureManager(DataUpdateCoordinator[None], EntityDevice):
 
     async def _followup_run(self) -> None:
         if self.operation == ManagerMode.OFF:
-            await self.ramp_off()
+            await self.stop_all()
         elif self.zero_fast != datetime.max:
             await self._run_power_update(self.p1_last, True, datetime.now())
 
@@ -812,6 +1258,11 @@ class ZendureManager(DataUpdateCoordinator[None], EntityDevice):
     async def powerChanged(self, p1: int, isFast: bool, time: datetime) -> None:
         """Return the distribution setpoint."""
         availableKwh = 0
+        p1 = self.p1_band(p1)
+        # B: a big rise of the import since the last cycle (however it was detected) may be shared by two inverters
+        growth = p1 - self.jump_ref if p1 > 0 else 0
+        self.jump_split = growth if SmartMode.JUMP_SPLIT_W and growth >= SmartMode.JUMP_SPLIT_W else 0
+        self.jump_ref = abs(p1)  # the reference of the jump detection: the deviation this cycle corrects
         setpoint = p1
         power = 0
         totalStoredkWh = 0
@@ -867,7 +1318,9 @@ class ZendureManager(DataUpdateCoordinator[None], EntityDevice):
         self._set_devices(self.devicesOnline, [*self.charge, *self.discharge, *self.idle])
         self._set_devices(self.devicesCharging, self.charge)
         self._set_devices(self.devicesDischarging, self.discharge)
-        self._set_devices(self.devicesIdle, self.idle)
+        # idle = standby and awake (ready for a command); sleep = smartMode 0, about 1-2 s slower to start
+        self._set_devices(self.devicesIdle, [d for d in self.idle if not getattr(d, "asleep", False)])
+        self._set_devices(getattr(self, "devicesSleep", None), [d for d in self.idle if getattr(d, "asleep", False)])
         self._set_devices(getattr(self, "devicesNotResponding", None), not_responding)
         self.power.update_value(power)
         self.availableKwh.update_value(availableKwh)
@@ -881,6 +1334,7 @@ class ZendureManager(DataUpdateCoordinator[None], EntityDevice):
         # and p1 >= 0, the result stays >= 0 — the #1151 guarantee holds structurally.
         setpoint -= self.discharge_bypass
         setpoint = self._cloud_adjust(setpoint, time)
+        self.last_setpoint = setpoint
         self.dispatchSetpoint.update_value(setpoint)
         self._check_crossflow(time)
 
@@ -939,6 +1393,7 @@ class ZendureManager(DataUpdateCoordinator[None], EntityDevice):
         was = volatility.active
         volatility.add(time.timestamp(), setpoint)
         if volatility.active != was:
+            events.emit("cloud_on" if volatility.active else "cloud_off", "", edges=volatility.edges, threshold=volatility.threshold, peak_surplus=volatility.peak_surplus)
             _LOGGER.info(
                 "Changing clouds mode %s (%s edges of %s W or more in 10 minutes, peak surplus %s W)",
                 "on" if volatility.active else "off",
@@ -974,10 +1429,41 @@ class ZendureManager(DataUpdateCoordinator[None], EntityDevice):
 
         With little sun a fixed 100 W is a large part of the production that is then not stored.
         """
-        return int(min(self.export_bias, SmartMode.CLOUD_MARGIN_SHARE * self._volatility().peak_surplus))
+        if self.solar_fills is False:
+            return 0  # the batteries will not be full today: every Wh of sun is stored, none is exported on purpose
+        margin = int(min(self.export_bias, SmartMode.CLOUD_MARGIN_SHARE * self._volatility().peak_surplus))
+        # a negative P1 target already leaves that much export: the larger of both counts, they do not add up
+        return max(0, margin + min(0, self.p1_target))
+
+    def jump_check(self, p1: int, time: datetime) -> bool:
+        """True when P1 jumped so far since the last cycle that a cycle must run now, also inside the fast window.
+
+        The jump is the growth of the deviation from the target since the start of the last cycle: a kettle or a
+        hob that switches on (import), or switches off while the batteries discharge (export). The response of
+        the batteries to the last cycle only makes the deviation smaller, so it never counts as a jump, also
+        while the inverters are still ramping. A load that builds up (an induction hob: 800 W, then 2000 W)
+        starts a cycle as soon as JUMP_W more is seen, and one more when it keeps rising.
+        """
+        if SmartMode.JUMP_W <= 0 or self.operation not in (ManagerMode.MATCHING, ManagerMode.MATCHING_CHARGE, ManagerMode.MATCHING_DISCHARGE, ManagerMode.STORE_SOLAR):
+            return False
+        growth = abs(self.p1_band(p1)) - self.jump_ref
+        if growth < SmartMode.JUMP_W:
+            return False
+        if self.zero_fast == datetime.max:
+            self.jump_pending = True  # a cycle runs: the next one starts right after it
+            return False
+        last = getattr(self, "last_cycle", None)
+        if last is not None and (time - last).total_seconds() < SmartMode.JUMP_GAP:
+            return False  # checked again with the next P1 value
+        self.p1tracker.history.clear()  # the jump is the new reference of the fast change detection
+        self.p1tracker.history.append(p1)
+        self.jump_total += 1
+        since = round((time - last).total_seconds(), 1) if last is not None else None
+        events.emit("p1_jump", "", p1=p1, growth=growth, since_cycle=since)
+        return True
 
     def followup_needed(self, _p1: int) -> bool:
-        """Run the next control cycle after RAMP_INTERVAL while a device is still ramping.
+        """Run the next control cycle after RAMP_INTERVAL while a command is held back (direction change, minimum run).
 
         Also running every second while P1 moves at a cloud edge was tried (option A): in the simulation it gave
         more device starts and not less import, because the control reacted to every intermediate value. The
@@ -1017,6 +1503,7 @@ class ZendureManager(DataUpdateCoordinator[None], EntityDevice):
         ]
         if not devices:
             return
+        p1 = self.p1_band(p1)
         target = -self.cloud_margin if self.cloud_mode and (direction < 0 or SmartMode.CLOUD_MARGIN_DISCHARGE) else 0
         pending = sum(d.slew.current - (d.homeOutput.asInt - d.homeInput.asInt) for d in devices)
         error = p1 - target - pending  # > 0: the home needs more power from the batteries
@@ -1043,8 +1530,9 @@ class ZendureManager(DataUpdateCoordinator[None], EntityDevice):
             if abs(new - d.slew.current) < SmartMode.POWER_TOLERANCE:
                 continue
             last[d.deviceId] = moment
+            self.fast_track_total += 1
             if direction > 0:
-                await d.power_discharge(new, ready=d.deviceId == self.roles.discharger)
+                await d.power_discharge(new)
             else:
                 await d.power_charge(new)
 
@@ -1058,6 +1546,8 @@ class ZendureManager(DataUpdateCoordinator[None], EntityDevice):
         RESERVE_KEEP %, so it does not switch on and off around the limit.
         """
         reserve = self.roles.discharger if self.cloud_mode else None
+        if reserve is not None and (holder := next((d for d in self.devices if d.deviceId == reserve), None)) is not None and self._usable_soc(holder) < ROLE_GUARD:
+            reserve = None  # 1.6.5: an almost empty reserve covers no peak; it may charge
         if reserve is not None:
             # nominal capacity of all other online devices (also those still discharging at a cloud edge):
             # the reserve only joins above what they can take together
@@ -1104,7 +1594,8 @@ class ZendureManager(DataUpdateCoordinator[None], EntityDevice):
             if prepare is None:
                 continue
             if d.deviceId == self.roles.charger and d.state != DeviceState.SOCFULL:
-                await prepare(-1)
+                # no more sun today (solar forecast): ready to discharge instead of keeping a charger ready
+                await prepare(1 if self.sun_low else -1)
             elif d.deviceId == self.roles.discharger and d.state != DeviceState.SOCEMPTY:
                 await prepare(1)
 
@@ -1139,10 +1630,35 @@ class ZendureManager(DataUpdateCoordinator[None], EntityDevice):
             self.roles.reset()
             self._show_roles()
             return
-        dischargeable = [(d.deviceId, d.electricLevel.asInt) for d in self.devices if d.state not in (DeviceState.OFFLINE, DeviceState.SOCEMPTY)]
-        chargeable = [(d.deviceId, d.electricLevel.asInt) for d in self.devices if d.state not in (DeviceState.OFFLINE, DeviceState.SOCFULL)]
+        # 1.6.5: the usable SoC (above the lower limit / the room below the upper limit), see RoleSelector.update
+        dischargeable = [(d.deviceId, self._usable_soc(d)) for d in self.devices if d.state not in (DeviceState.OFFLINE, DeviceState.SOCEMPTY)]
+        chargeable = [(d.deviceId, 100 - self._room_soc(d)) for d in self.devices if d.state not in (DeviceState.OFFLINE, DeviceState.SOCFULL)]
+        before = (self.roles.discharger, self.roles.charger)
         self.roles.update(dischargeable, chargeable)
+        if (self.roles.discharger, self.roles.charger) != before:
+            names = {d.deviceId: d.name for d in self.devices}
+            soc = {d.deviceId: d.electricLevel.asInt for d in self.devices}
+            events.emit(
+                "role_change",
+                "",
+                discharge=f"{names.get(before[0], '-')}>{names.get(self.roles.discharger, '-')}",
+                charge=f"{names.get(before[1], '-')}>{names.get(self.roles.charger, '-')}",
+                soc="/".join(f"{names[i]}:{soc[i]}" for i in names),
+                margin=self.role_margin,
+            )
         self._show_roles()
+
+    @staticmethod
+    def _usable_soc(d: Any) -> int:
+        """SoC points above the lower limit (minSoc) of the device."""
+        low = getattr(getattr(d, "minSoc", None), "asNumber", 0) or 0
+        return int(d.electricLevel.asInt - low)
+
+    @staticmethod
+    def _room_soc(d: Any) -> int:
+        """SoC points below the upper limit (socSet) of the device."""
+        high = getattr(getattr(d, "socSet", None), "asNumber", 100) or 100
+        return int(high - d.electricLevel.asInt)
 
     def _activity(self, device: ZendureDevice) -> str:
         """What a device does now, from the same classification as the device count sensors."""
@@ -1151,7 +1667,9 @@ class ZendureManager(DataUpdateCoordinator[None], EntityDevice):
         if device in self.discharge:
             return "discharging"
         if device in self.idle:
-            return "reserve" if device.deviceId == self.cloud_reserve else "standby"
+            if device.deviceId == self.cloud_reserve:
+                return "reserve"
+            return "sleeping" if getattr(device, "asleep", False) else "standby"
         return "not_responding"
 
     def _show_roles(self) -> None:
@@ -1322,7 +1840,9 @@ class ZendureManager(DataUpdateCoordinator[None], EntityDevice):
         if hysteresis and self.charge_time > time:
             if self.charge_time == datetime.max:
                 # during changing clouds a cloud is followed by sun within a minute: wait shorter before charging again
-                delay = SmartMode.CLOUD_CHARGE_DELAY if self.cloud_mode else SmartMode.CHARGE_DELAY
+                # during changing clouds, and on a day the batteries will not be full (solar forecast, 1.6.5), a
+                # short delay: a Wh of sun that is exported while waiting is lost (4 November: 66 s, 1.3 kW export)
+                delay = SmartMode.CLOUD_CHARGE_DELAY if self.cloud_mode or self.solar_fills is False else SmartMode.CHARGE_DELAY
                 self.charge_time = time + timedelta(seconds=SmartMode.CHARGE_DELAY_FIRST if (time - self.charge_last).total_seconds() > SmartMode.CHARGE_DELAY_WINDOW else delay)
                 self.charge_last = self.charge_time
                 self.pwr_low = 0
@@ -1419,6 +1939,15 @@ class ZendureManager(DataUpdateCoordinator[None], EntityDevice):
         if setpoint > 0:
             self._record_demand(True, setpoint, time)
         dev_start = max(0, setpoint - self._fill(self.discharge_optimal) - self.discharge_produced) if setpoint > self.start_threshold else 0
+        # a big jump (JUMP_SPLIT_W) is shared by two inverters, so two ramp up together; the spreading rules merge
+        # them again when the load stays
+        split, self.jump_split = (self.jump_split if setpoint > 0 else 0), 0
+        startable = [d for d in self.idle if d.state != DeviceState.SOCEMPTY]
+        two = bool(split) and not self.discharge and len(startable) >= 2
+        if split and len(self.discharge) == 1 and startable:
+            extra = min(split, setpoint) // 2
+            dev_start = max(dev_start, extra)
+            setpoint -= extra  # the running inverter takes the rest, a started one this part
         solaronly = self.discharge_produced >= setpoint
         limit = self.discharge_produced if solaronly else self.discharge_limit
         setpoint = min(limit, setpoint)
@@ -1455,10 +1984,7 @@ class ZendureManager(DataUpdateCoordinator[None], EntityDevice):
                 pwr = 0
 
             self._use(d, used, pwr)
-            if d.deviceId == self.roles.discharger:
-                setpoint -= await d.power_discharge(pwr, ready=True)
-            else:
-                setpoint -= await d.power_discharge(pwr)
+            setpoint -= await d.power_discharge(pwr)
             dev_start += 1 if pwr != 0 and d.electricLevel.asInt + self.start_margin < self.idle_lvlmax else 0
 
         # start idle device if needed
@@ -1470,19 +1996,19 @@ class ZendureManager(DataUpdateCoordinator[None], EntityDevice):
             for d in self.idle:
                 if d.state != DeviceState.SOCEMPTY:
                     # a started device takes the power that the running devices cannot deliver (the device that was
-                    # kept ready first); above its limit the next device takes the rest. The slew limiter protects them.
-                    start = max(SmartMode.POWER_START, min(missing, d.discharge_limit, self._headroom(d, used, True)))
+                    # kept ready first); above its limit the next device takes the rest.
+                    cap = (missing + 1) // 2 if two and not starts else missing
+                    start = max(SmartMode.POWER_START, min(cap, d.discharge_limit, self._headroom(d, used, True)))
                     if self._headroom(d, used, True) < SmartMode.POWER_START:
                         continue  # its fuse group is already at the limit
                     self._use(d, used, start)
                     self._released().pop((d.deviceId, True), None)
-                    # the device that was kept ready may ramp up faster (only from standby, not on a direction change)
-                    if d.deviceId == self.roles.discharger:
-                        starts.append(d.power_discharge(start, ready=True))
-                    else:
-                        starts.append(d.power_discharge(start))
+                    starts.append(d.power_discharge(start))
                     missing -= start
-                    if (dev_start := dev_start - max(self._fill(d.discharge_optimal), start)) <= 0:
+                    dev_start -= max(self._fill(d.discharge_optimal), start)
+                    if two and len(starts) < 2 and missing >= SmartMode.POWER_START:
+                        continue  # the second inverter of a shared jump
+                    if dev_start <= 0:
                         break
             # all new devices are started at the same time
             await asyncio.gather(*starts)

@@ -51,7 +51,7 @@ class _FakeWs:
     async def send_json(self, data: dict[str, Any]) -> None:
         self.sent.append(data)
 
-    async def receive(self, timeout: float | None = None) -> Any:
+    async def receive(self, timeout: float | None = None) -> Any:  # noqa: ASYNC109 - same signature as aiohttp
         await asyncio.sleep(0)
         if not self._messages:
             return SimpleNamespace(type=WSMsgType.CLOSED)
@@ -85,7 +85,7 @@ async def test_websocket_authorizes_subscribes_and_hands_over_values(hass, monke
     monkeypatch.setattr(p1direct, "ssl_context", ctx)
     values: list[int] = []
 
-    async def on_value(p1: int) -> None:
+    async def on_value(p1: int, _age_ms: int = 0) -> None:
         values.append(p1)
 
     meter = HomeWizardP1(hass, "192.168.1.30", "ABC", on_value)
@@ -107,7 +107,7 @@ async def test_websocket_refused_token(hass, monkeypatch) -> None:  # noqa: ANN0
 
     monkeypatch.setattr(p1direct, "ssl_context", ctx)
 
-    async def on_value(_p1: int) -> None:
+    async def on_value(_p1: int, _age_ms: int = 0) -> None:
         return None
 
     with pytest.raises(UnauthorizedError):
@@ -118,7 +118,7 @@ async def test_only_newest_value_while_busy(hass) -> None:  # noqa: ANN001
     handled: list[int] = []
     gate = asyncio.Event()
 
-    async def on_value(p1: int) -> None:
+    async def on_value(p1: int, _age_ms: int = 0) -> None:
         handled.append(p1)
         await gate.wait()
 
@@ -133,7 +133,7 @@ async def test_only_newest_value_while_busy(hass) -> None:  # noqa: ANN001
 
 
 async def test_fallback_and_new_address(hass) -> None:  # noqa: ANN001
-    async def on_value(_p1: int) -> None:
+    async def on_value(_p1: int, _age_ms: int = 0) -> None:
         return None
 
     meter = HomeWizardP1(hass, "192.168.1.30", None, on_value, resolve=lambda: "192.168.1.31")
@@ -153,7 +153,7 @@ async def test_sensor_ignored_while_meter_is_read_directly(hass) -> None:  # noq
     manager.hass = hass
     handled: list[int] = []
 
-    async def handle(p1: int, _source: str = "sensor") -> None:
+    async def handle(p1: int, _source: str = "sensor", _age: int | None = None) -> None:
         handled.append(p1)
 
     manager._handle_p1 = handle  # type: ignore[method-assign]
@@ -179,7 +179,7 @@ def test_report_serial_and_subnet() -> None:
 
 
 async def test_search_subnet_finds_moved_device(hass, monkeypatch) -> None:  # noqa: ANN001
-    async def probe(_hass: Any, host: str, _timeout: Any = None) -> str | None:
+    async def probe(_hass: Any, host: str, _request_timeout: Any = None) -> str | None:
         return {"192.168.1.57": "HEC4NENCN521112", "192.168.1.8": "OTHERDEVICE"}.get(host)
 
     monkeypatch.setattr(discovery, "probe_serial", probe)
@@ -205,7 +205,7 @@ async def test_unmatched_mdns_service_identified_by_report(hass, monkeypatch) ->
     monkeypatch.setattr(zc, "AsyncServiceInfo", Info)
     calls: list[str] = []
 
-    async def probe(_hass: Any, host: str, _timeout: Any = None) -> str | None:
+    async def probe(_hass: Any, host: str, _request_timeout: Any = None) -> str | None:
         calls.append(host)
         return "hec4nencn521112"
 

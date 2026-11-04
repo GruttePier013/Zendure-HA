@@ -24,7 +24,7 @@ def _manager(hass: Any) -> ZendureManager:
     m.operation = ManagerMode.MATCHING
     m.last_cycle = None
     m._followup = None
-    for name in ("cycleDuration", "cycleInterval", "cycleCount", "lastCycle", "p1Value", "devicesRamping"):
+    for name in ("cycleDuration", "cycleInterval", "cycleCount", "lastCycle", "p1Value"):
         setattr(m, name, _Value())
     return m
 

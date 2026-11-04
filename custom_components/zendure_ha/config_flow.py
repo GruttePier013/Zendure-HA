@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Callable
 from typing import Any
 
 import voluptuous as vol
@@ -18,8 +19,12 @@ from .const import (
     CONF_AUTO_MQTT_USER,
     CONF_DEVICE_IPS,
     CONF_EXPORT_BIAS,
+    CONF_JUMP,
     CONF_FILL_LEVEL,
     CONF_FLASH_SAFE,
+    CONF_READY_HOURS,
+    CONF_SLEEP_AFTER,
+    CONF_SOLAR_FORECAST,
     CONF_FLIP_DELAY,
     CONF_MANUAL_INTERVAL,
     CONF_MIN_RUN,
@@ -32,17 +37,14 @@ from .const import (
     CONF_P1_STDDEV_MIN,
     CONF_P1_HOMEWIZARD,
     CONF_P1_RECORD,
+    CONF_P1_RECORD_DETAIL,
     CONF_P1_TOKEN,
     CONF_P1METER,
     CONF_PEAK_LIMIT,
-    CONF_READY_RATE,
     CONF_POWER_START,
     CONF_POWER_TOLERANCE,
     CONF_ROLE_MARGIN,
     CONF_SIM,
-    CONF_SLEW_DOWN,
-    CONF_SLEW_ENABLED,
-    CONF_SLEW_UP,
     CONF_TIMEFAST,
     CONF_TIMEZERO,
     CONF_WIFIPSW,
@@ -51,7 +53,7 @@ from .const import (
     DOMAIN,
 )
 from .manager import ZendureConfigEntry
-from .slew import DEFAULT_DOWN, DEFAULT_FLIP_DELAY, DEFAULT_MIN_RUN, DEFAULT_READY_UP, DEFAULT_UP
+from .slew import DEFAULT_FLIP_DELAY, DEFAULT_MIN_RUN
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -60,7 +62,7 @@ class ZendureConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Zendure HA-GP013."""
 
     VERSION = 1
-    MINOR_VERSION = 8
+    MINOR_VERSION = 9
     _input_data: dict[str, Any]
     data_schema = vol.Schema(
         {
@@ -192,7 +194,7 @@ class ZendureOptionsFlowHandler(OptionsFlow):
     that need a new connection (token, MQTT) trigger one reload when the menu is finished.
     """
 
-    MENU = ["connection", "mqtt", "p1_meter", "power_control", "slew", "lifetime", "device_ips", "diagnostics", "finish"]
+    MENU = ["connection", "mqtt", "p1_meter", "power_control", "slew", "lifetime", "solar", "device_ips", "diagnostics", "finish"]
 
     def __init__(self) -> None:
         """Initialize."""
@@ -260,7 +262,6 @@ class ZendureOptionsFlowHandler(OptionsFlow):
         """Overview of the current settings, shown above the menu."""
         data = self.config_entry.data
         local = data.get(CONF_MQTTLOCAL, False)
-        slew = data.get(CONF_SLEW_ENABLED, True)
         w = self._word
 
         def onoff(value: bool) -> str:
@@ -273,18 +274,18 @@ class ZendureOptionsFlowHandler(OptionsFlow):
             "control": (
                 f"{_n(data.get(CONF_TIMEZERO, CONTROL_DEFAULTS[CONF_TIMEZERO]))} s / "
                 f"{_n(data.get(CONF_TIMEFAST, CONTROL_DEFAULTS[CONF_TIMEFAST]))} s, "
-                f"{w('start')} {_n(data.get(CONF_POWER_START, CONTROL_DEFAULTS[CONF_POWER_START]))} W"
+                f"{w('start')} {_n(data.get(CONF_POWER_START, CONTROL_DEFAULTS[CONF_POWER_START]))} W, "
+                f"{w('jump')} {_jump(data.get(CONF_JUMP, CONTROL_DEFAULTS[CONF_JUMP]), w)}"
             ),
-            "slew": (
-                f"{_n(data.get(CONF_SLEW_UP, DEFAULT_UP))} / {_n(data.get(CONF_SLEW_DOWN, DEFAULT_DOWN))} W/s, {_n(data.get(CONF_FLIP_DELAY, DEFAULT_FLIP_DELAY))} s"
-                if slew
-                else w("off")
-            ),
+            "slew": f"{_n(data.get(CONF_FLIP_DELAY, DEFAULT_FLIP_DELAY))} s, {_n(data.get(CONF_MIN_RUN, DEFAULT_MIN_RUN))} s",
             "lifetime": (
                 f"{w('spread')} {_n(data.get(CONF_FILL_LEVEL, CONTROL_DEFAULTS[CONF_FILL_LEVEL]))}%, "
                 f"{w('role_margin')} {_n(data.get(CONF_ROLE_MARGIN, CONTROL_DEFAULTS[CONF_ROLE_MARGIN]))}%, "
-                f"{w('flash')} {onoff(data.get(CONF_FLASH_SAFE, True))}"
+                f"{w('flash')} {onoff(data.get(CONF_FLASH_SAFE, True))}, "
+                f"{w('sleep')} {_sleep(data.get(CONF_SLEEP_AFTER, CONTROL_DEFAULTS[CONF_SLEEP_AFTER]), w)}"
+                + (f", {w('ready')} {data.get(CONF_READY_HOURS)}" if data.get(CONF_READY_HOURS) else "")
             ),
+            "solar": self._solar_summary(),
             "addresses": str(len(data.get(CONF_DEVICE_IPS) or {})),
             "logging": onoff(data.get(CONF_MQTTLOG, False)),
             "simulation": onoff(data.get(CONF_SIM, False)) + self._record_summary(),
@@ -476,6 +477,7 @@ class ZendureOptionsFlowHandler(OptionsFlow):
                 vol.Required(CONF_MANUAL_INTERVAL): self._number(4, 300, 1, "s"),
                 vol.Required(CONF_PEAK_LIMIT): self._number(0, 20000, 50, "W"),
                 vol.Required(CONF_EXPORT_BIAS): self._number(0, 500, 10, "W"),
+                vol.Required(CONF_JUMP): self._number(0, 3000, 50, "W"),
             }
         )
         current = {key: self._setting(key, default) for key, default in CONTROL_DEFAULTS.items()}
@@ -495,21 +497,13 @@ class ZendureOptionsFlowHandler(OptionsFlow):
 
         schema = vol.Schema(
             {
-                vol.Required(CONF_SLEW_ENABLED): bool,
-                vol.Required(CONF_SLEW_UP): self._number(50, 5000, 10, "W/s"),
-                vol.Required(CONF_SLEW_DOWN): self._number(50, 10000, 10, "W/s"),
                 vol.Required(CONF_FLIP_DELAY): self._number(0, 60, 1, "s"),
                 vol.Required(CONF_MIN_RUN): self._number(0, 120, 1, "s"),
-                vol.Required(CONF_READY_RATE): self._number(50, 5000, 10, "W/s"),
             }
         )
         current = {
-            CONF_SLEW_ENABLED: self._setting(CONF_SLEW_ENABLED, True),
-            CONF_SLEW_UP: self._setting(CONF_SLEW_UP, DEFAULT_UP),
-            CONF_SLEW_DOWN: self._setting(CONF_SLEW_DOWN, DEFAULT_DOWN),
             CONF_FLIP_DELAY: self._setting(CONF_FLIP_DELAY, DEFAULT_FLIP_DELAY),
             CONF_MIN_RUN: self._setting(CONF_MIN_RUN, DEFAULT_MIN_RUN),
-            CONF_READY_RATE: self._setting(CONF_READY_RATE, DEFAULT_READY_UP),
         }
         return self.async_show_form(step_id="slew", data_schema=self.add_suggested_values_to_schema(schema, current))
 
@@ -517,23 +511,37 @@ class ZendureOptionsFlowHandler(OptionsFlow):
     # lifetime: roles of multiple devices and flash protection
     # ----------------------------------------------------------------------------------------
     async def async_step_lifetime(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        from .dispatch import parse_hours
+
+        errors: dict[str, str] = {}
         if user_input is not None:
-            self._store(user_input)
-            return await self.async_step_init()
+            hours = str(user_input.get(CONF_READY_HOURS) or "").strip()
+            try:
+                parse_hours(hours)
+            except ValueError:
+                errors[CONF_READY_HOURS] = "invalid_hours"
+            else:
+                self._store({**user_input, CONF_READY_HOURS: hours})  # an emptied field is not sent: store ""
+                return await self.async_step_init()
 
         schema = vol.Schema(
             {
                 vol.Required(CONF_ROLE_MARGIN): self._number(0, 50, 1, "%"),
                 vol.Required(CONF_FILL_LEVEL): self._number(20, 100, 5, "%"),
                 vol.Required(CONF_FLASH_SAFE): bool,
+                vol.Required(CONF_SLEEP_AFTER): self._number(0, 60, 1, "min"),
+                vol.Optional(CONF_READY_HOURS): selector.TextSelector(),
             }
         )
         current = {
             CONF_ROLE_MARGIN: self._setting(CONF_ROLE_MARGIN, CONTROL_DEFAULTS[CONF_ROLE_MARGIN]),
             CONF_FILL_LEVEL: self._setting(CONF_FILL_LEVEL, CONTROL_DEFAULTS[CONF_FILL_LEVEL]),
             CONF_FLASH_SAFE: self._setting(CONF_FLASH_SAFE, True),
+            CONF_SLEEP_AFTER: self._setting(CONF_SLEEP_AFTER, CONTROL_DEFAULTS[CONF_SLEEP_AFTER]),
         }
-        return self.async_show_form(step_id="lifetime", data_schema=self.add_suggested_values_to_schema(schema, current))
+        if self._setting(CONF_READY_HOURS, ""):
+            current[CONF_READY_HOURS] = self._setting(CONF_READY_HOURS, "")
+        return self.async_show_form(step_id="lifetime", data_schema=self.add_suggested_values_to_schema(schema, user_input or current), errors=errors)
 
     # ----------------------------------------------------------------------------------------
     # fixed addresses of zenSDK devices (cloud / mDNS does not report one across VLANs)
@@ -544,6 +552,30 @@ class ZendureOptionsFlowHandler(OptionsFlow):
 
         manager = getattr(self.config_entry, "runtime_data", None)
         return {d.snNumber: d for d in getattr(manager, "devices", []) if isinstance(d, ZendureZenSdk)}
+
+    # ----------------------------------------------------------------------------------------
+    # solar forecast (1.6.2)
+    # ----------------------------------------------------------------------------------------
+    def _solar_summary(self) -> str:
+        sensor = self.config_entry.data.get(CONF_SOLAR_FORECAST) or ""
+        if not sensor:
+            return "-"
+        from homeassistant.util import dt as dt_util
+
+        from .solar import remaining_kwh
+
+        remaining = remaining_kwh(self.hass.states.get(sensor), dt_util.now())
+        return f"{sensor} ({_n(remaining)} kWh {self._word('still_today')})" if remaining is not None else f"{sensor} ({self._word('no_value')})"
+
+    async def async_step_solar(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """The sensor with the solar forecast of today: will the batteries be full, is there still sun to come."""
+        if user_input is not None:
+            # an emptied selector is not sent: store "" to switch the forecast off
+            self._store({CONF_SOLAR_FORECAST: user_input.get(CONF_SOLAR_FORECAST) or ""})
+            return await self.async_step_init()
+        schema = vol.Schema({vol.Optional(CONF_SOLAR_FORECAST): selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor"))})
+        current = {CONF_SOLAR_FORECAST: self._setting(CONF_SOLAR_FORECAST, "")} if self._setting(CONF_SOLAR_FORECAST, "") else {}
+        return self.async_show_form(step_id="solar", data_schema=self.add_suggested_values_to_schema(schema, current))
 
     async def async_step_device_ips(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         errors: dict[str, str] = {}
@@ -596,11 +628,19 @@ class ZendureOptionsFlowHandler(OptionsFlow):
             self._store(user_input)
             return await self.async_step_init()
 
-        schema = vol.Schema({vol.Required(CONF_MQTTLOG): bool, vol.Required(CONF_SIM): bool, vol.Optional(CONF_P1_RECORD, default=False): bool})
+        schema = vol.Schema(
+            {
+                vol.Required(CONF_MQTTLOG): bool,
+                vol.Required(CONF_SIM): bool,
+                vol.Optional(CONF_P1_RECORD, default=False): bool,
+                vol.Optional(CONF_P1_RECORD_DETAIL, default=True): bool,
+            }
+        )
         current = {
             CONF_MQTTLOG: self._setting(CONF_MQTTLOG, False),
             CONF_SIM: self._setting(CONF_SIM, False),
             CONF_P1_RECORD: self._setting(CONF_P1_RECORD, "") == today,
+            CONF_P1_RECORD_DETAIL: self._setting(CONF_P1_RECORD_DETAIL, True),
         }
         return self.async_show_form(step_id="diagnostics", data_schema=self.add_suggested_values_to_schema(schema, current))
 
@@ -622,25 +662,35 @@ def _n(value: Any) -> str:
     return str(int(number)) if number.is_integer() else str(number)
 
 
+def _jump(watt: Any, w: Callable[[str], str]) -> str:
+    """'off' or '400 W' for the settings overview."""
+    return w("off") if not watt else f"{_n(watt)} W"
+
+
+def _sleep(minutes: Any, w: Callable[[str], str]) -> str:
+    """'off' or 'after 10 min' for the settings overview."""
+    return w("off") if not minutes else f"{w('after')} {_n(minutes)} min"
+
+
 # words of the settings overview above the options menu (the placeholders are not translated by Home Assistant)
 SUMMARY_WORDS: dict[str, dict[str, str]] = {
-    "en": {"recording": "P1 recording until 00:00 in", "set": "set", "missing": "missing", "local": "local", "cloud": "cloud", "start": "start", "on": "on", "off": "off",
+    "en": {"ready": "discharger awake", "still_today": "still today", "no_value": "no value", "jump": "peak detection", "sleep": "sleep when idle", "after": "after", "recording": "P1 recording until 00:00 in", "set": "set", "missing": "missing", "local": "local", "cloud": "cloud", "start": "start", "on": "on", "off": "off",
            "spread": "spread threshold", "role_margin": "role switch margin", "flash": "safe state in flash",
            "own_token": "own token", "hw_token": "token of the HomeWizard integration", "every_second": "every second",
            "connecting": "connecting", "not_answering": "not answering, the sensor is used", "not_running": "not running"},
-    "nl": {"recording": "P1-opname tot 00:00 in", "set": "ingesteld", "missing": "ontbreekt", "local": "lokaal", "cloud": "cloud", "start": "start", "on": "aan", "off": "uit",
+    "nl": {"ready": "ontlader wakker", "still_today": "nog vandaag", "no_value": "geen waarde", "jump": "piekdetectie", "sleep": "slapen bij stilstand", "after": "na", "recording": "P1-opname tot 00:00 in", "set": "ingesteld", "missing": "ontbreekt", "local": "lokaal", "cloud": "cloud", "start": "start", "on": "aan", "off": "uit",
            "spread": "spreiddrempel", "role_margin": "rolwisselmarge", "flash": "veilige stand in flash",
            "own_token": "eigen token", "hw_token": "token van de HomeWizard-integratie", "every_second": "elke seconde",
            "connecting": "verbinden", "not_answering": "antwoordt niet, de sensor wordt gebruikt", "not_running": "niet actief"},
-    "de": {"recording": "P1-Aufzeichnung bis 00:00 in", "set": "gesetzt", "missing": "fehlt", "local": "lokal", "cloud": "Cloud", "start": "Start", "on": "an", "off": "aus",
+    "de": {"ready": "Entlader wach", "still_today": "noch heute", "no_value": "kein Wert", "jump": "Spitzenerkennung", "sleep": "Ruhezustand im Leerlauf", "after": "nach", "recording": "P1-Aufzeichnung bis 00:00 in", "set": "gesetzt", "missing": "fehlt", "local": "lokal", "cloud": "Cloud", "start": "Start", "on": "an", "off": "aus",
            "spread": "Verteilschwelle", "role_margin": "Rollenwechsel-Marge", "flash": "sicherer Zustand im Flash",
            "own_token": "eigenes Token", "hw_token": "Token der HomeWizard-Integration", "every_second": "jede Sekunde",
            "connecting": "verbinde", "not_answering": "antwortet nicht, der Sensor wird verwendet", "not_running": "nicht aktiv"},
-    "fr": {"recording": "enregistrement P1 jusqu'à 00:00 dans", "set": "défini", "missing": "manquant", "local": "local", "cloud": "cloud", "start": "démarrage", "on": "activé", "off": "désactivé",
+    "fr": {"ready": "décharge éveillée", "still_today": "encore aujourd'hui", "no_value": "pas de valeur", "jump": "détection de pics", "sleep": "veille à l'arrêt", "after": "après", "recording": "enregistrement P1 jusqu'à 00:00 dans", "set": "défini", "missing": "manquant", "local": "local", "cloud": "cloud", "start": "démarrage", "on": "activé", "off": "désactivé",
            "spread": "seuil de répartition", "role_margin": "marge de changement de rôle", "flash": "état sûr en flash",
            "own_token": "jeton propre", "hw_token": "jeton de l'intégration HomeWizard", "every_second": "chaque seconde",
            "connecting": "connexion", "not_answering": "ne répond pas, le capteur est utilisé", "not_running": "inactif"},
-    "pl": {"recording": "nagrywanie P1 do 00:00 w", "set": "ustawiony", "missing": "brak", "local": "lokalny", "cloud": "chmura", "start": "start", "on": "wł.", "off": "wył.",
+    "pl": {"ready": "rozładowujący aktywny", "still_today": "jeszcze dziś", "no_value": "brak wartości", "jump": "wykrywanie szczytów", "sleep": "uśpienie bezczynnego", "after": "po", "recording": "nagrywanie P1 do 00:00 w", "set": "ustawiony", "missing": "brak", "local": "lokalny", "cloud": "chmura", "start": "start", "on": "wł.", "off": "wył.",
            "spread": "próg rozkładu", "role_margin": "margines zmiany roli", "flash": "stan bezpieczny we flashu",
            "own_token": "własny token", "hw_token": "token integracji HomeWizard", "every_second": "co sekundę",
            "connecting": "łączenie", "not_answering": "nie odpowiada, używany jest czujnik", "not_running": "nieaktywny"},

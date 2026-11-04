@@ -55,11 +55,11 @@ def subnet_hosts(address: str) -> list[str]:
     return sorted(hosts, key=lambda h: abs(int(ipaddress.IPv4Address(h)) - int(ip)))
 
 
-async def probe_serial(hass: HomeAssistant, address: str, timeout: ClientTimeout = PROBE_TIMEOUT) -> str | None:
+async def probe_serial(hass: HomeAssistant, address: str, request_timeout: ClientTimeout = PROBE_TIMEOUT) -> str | None:
     """Ask a zenSDK device at an address for its serial number."""
     try:
         session = async_get_clientsession(hass)
-        async with session.get(f"http://{address}/properties/report", timeout=timeout) as response:
+        async with session.get(f"http://{address}/properties/report", timeout=request_timeout) as response:
             if response.status != 200:
                 return None
             return report_serial(await response.text())

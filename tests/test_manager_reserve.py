@@ -248,14 +248,15 @@ async def test_no_start_when_the_fuse_group_is_full() -> None:
     assert second.discharge_calls == []
 
 
-async def test_only_the_ready_device_gets_the_fast_start() -> None:
+async def test_the_ready_device_starts_first_and_takes_the_most() -> None:
+    """1.6.0: no faster ramp any more (the inverter ramps by itself), but the ready device is still the first choice."""
     manager = _make_manager_harness()
     ready, second = _idle(80), _idle(60)
     manager.idle = [second, ready]
     manager.roles.discharger = ready.deviceId
     await manager.power_discharge(3500)
-    assert ready.ready_calls == [True]
-    assert second.ready_calls == [False]
+    assert ready.discharge_calls[0] >= second.discharge_calls[0]
+    assert ready.discharge_calls[0] + second.discharge_calls[0] == 3500
 
 
 async def test_released_device_with_a_lagging_report_stays_in_standby() -> None:

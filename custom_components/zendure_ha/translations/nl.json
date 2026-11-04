@@ -83,9 +83,6 @@
       "hems_state": {
         "name": "HEMS actief"
       },
-      "slew_active": {
-        "name": "Ramp actief (slew-begrensd)"
-      },
       "mqtt_cloud": {
         "name": "Cloud MQTT verbonden"
       },
@@ -112,8 +109,8 @@
       "soc_set": {
         "name": "SOC Maximaal"
       },
-      "slew_factor": {
-        "name": "Slew-rate-factor"
+      "p1_target": {
+        "name": "P1-doel (band)"
       }
     },
     "sensor": {
@@ -404,6 +401,9 @@
       "p1_value": {
         "name": "P1-waarde"
       },
+      "p1_rate": {
+        "name": "P1-waarden per minuut"
+      },
       "dispatch_setpoint": {
         "name": "Verdeel-setpoint"
       },
@@ -419,8 +419,8 @@
       "devices_idle": {
         "name": "Apparaten inactief"
       },
-      "devices_ramping": {
-        "name": "Apparaten in ramp"
+      "devices_sleep": {
+        "name": "Apparaten in slaap"
       },
       "flash_writes": {
         "name": "Flash-schrijfacties"
@@ -440,6 +440,7 @@
           "charging": "Opladen",
           "discharging": "Ontladen",
           "standby": "Stand-by",
+          "sleeping": "Slaapt",
           "reserve": "Stand-by (wolkenreserve)",
           "not_responding": "Reageert niet"
         }
@@ -602,14 +603,15 @@
     "step": {
       "init": {
         "title": "Zendure HA-GP013-instellingen",
-        "description": "P1-sensor: {p1meter}\nToken: {token}\nMQTT: {mqtt}\nVermogensregeling (normaal / snel): {control}\nSlew rate (op / neer, wachttijd richtingwissel): {slew}\nMeerdere omvormers: {lifetime}\nVaste apparaatadressen: {addresses}\nMQTT-logging: {logging}, simulatie: {simulation}\n\nKies de instellingen die je wilt wijzigen.",
+        "description": "P1-sensor: {p1meter}\nToken: {token}\nMQTT: {mqtt}\nVermogensregeling (normaal / snel): {control}\nRichtingwissel (wachttijd, minimale looptijd): {slew}\nMeerdere omvormers: {lifetime}\nZonvoorspelling: {solar}\nVaste apparaatadressen: {addresses}\nMQTT-logging: {logging}, simulatie: {simulation}\n\nKies de instellingen die je wilt wijzigen.",
         "menu_options": {
           "connection": "Account / token",
           "mqtt": "MQTT & Wi-Fi",
           "p1_meter": "P1-meter",
           "power_control": "Vermogensregeling",
-          "slew": "Slew rate & richtingwissel",
+          "slew": "Richtingwissel-bescherming",
           "lifetime": "Meerdere omvormers (spreiden & rollen)",
+          "solar": "Zonvoorspelling",
           "device_ips": "Apparaatadressen",
           "diagnostics": "Logging, simulatie en testdata",
           "finish": "Opslaan en sluiten"
@@ -658,19 +660,19 @@
           "power_tolerance": "Vermogenstolerantie apparaat (W)",
           "manual_interval": "Updateinterval in handmatige modus (s)",
           "peak_limit": "Piekbegrenzing (W, 0 = uit)",
-          "export_bias": "Exportmarge tijdens laden bij wisselende bewolking (W, 0 = uit)"
+          "export_bias": "Exportmarge tijdens laden bij wisselende bewolking (W, 0 = uit)",
+          "jump_w": "Piekdetectie: P1-sprong die direct een cyclus start (W, 0 = uit)"
+        },
+        "data_description": {
+          "jump_w": "Als de import of export sinds de laatste regelcyclus zoveel is gegroeid (een waterkoker of kookplaat die aangaat, of uitgaat terwijl de batterijen ontladen), start de volgende cyclus meteen in plaats van na het snelle interval. Een last die opbouwt wordt gezien zodra er zoveel bij komt. De reactie van de batterijen telt nooit als sprong."
         }
       },
       "slew": {
-        "title": "Slew rate & richtingwissel",
-        "description": "Beperkt hoe snel het gevraagde vermogen verandert en gaat bij het wisselen tussen laden en ontladen altijd via 0 W (met een korte pauze). Dit beschermt relais en omvormer. De waarden zijn standaardwaarden en geen fabrieksspecificaties. Het apparaat dat klaarstaat voor pieken mag vanuit stand-by sneller starten; een richtingwissel gebruikt altijd de normale snelheid. Een richtingwissel gaat na 2 s door zodra het apparaat 0 W meldt, anders na de maximale pauze.",
+        "title": "Richtingwissel-bescherming",
+        "description": "De omvormer regelt zijn vermogen zelf op en af (ongeveer 250 W/s bij een SolarFlow 2400 AC+); de integratie begrenst dat niet meer. Een wissel tussen laden en ontladen gaat altijd via een bevestigde 0 W en wacht minstens de wachttijd hieronder als 0 W niet bevestigd is. Een gestarte omvormer blijft de minimale looptijd op laag vermogen draaien, zodat een korte verstoring het relais niet laat klapperen.",
         "data": {
-          "slew_enabled": "Snelheid van vermogensverandering beperken",
-          "slew_up": "Maximale toename (W/s)",
-          "slew_down": "Maximale afname (W/s)",
-          "flip_delay": "Maximale pauze op 0 W bij richtingwissel, zonder bevestigde 0 W (s)",
-          "min_run": "Minimale looptijd van een gestart apparaat (s)",
-          "ready_rate": "Snellere opbouw: start van het klaarstaande apparaat en apparaten die al in dezelfde richting draaien (W/s)"
+          "flip_delay": "Wachttijd bij richtingwissel als 0 W niet bevestigd is (s)",
+          "min_run": "Minimale looptijd van een gestart apparaat (s)"
         }
       },
       "lifetime": {
@@ -679,10 +681,14 @@
         "data": {
           "role_margin": "Rolwisselmarge (SoC %)",
           "fill_level": "Spreiddrempel (%)",
-          "flash_safe_state": "Veilige stand (0 W) in flash van apparaat opslaan"
+          "flash_safe_state": "Veilige stand (0 W) in flash van apparaat opslaan",
+          "sleep_after": "Stilstaande omvormers laten slapen na (min, 0 = uit)",
+          "ready_hours": "Ontlader alleen wakker houden om (uren, bv. 7-9,12-13,17-19)"
         },
         "data_description": {
-          "fill_level": "Belasting per omvormer voordat het vermogen over nog een omvormer wordt gespreid; daaronder wordt het samengevoegd op minder. 85% bij 3 × 2400 W: 1 omvormer tot ongeveer 1900–2000 W. Bij snel wisselende bewolking geldt 70%."
+          "fill_level": "Belasting per omvormer voordat het vermogen over nog een omvormer wordt gespreid; daaronder wordt het samengevoegd op minder. 85% bij 3 × 2400 W: 1 omvormer tot ongeveer 1900–2000 W. Bij snel wisselende bewolking geldt 70%.",
+          "sleep_after": "Een stilstaande Zendure-omvormer blijft ongeveer 30 W gebruiken zolang hij op opdrachten wacht (smartMode 1). Na dit aantal minuten op 0 W gaat hij slapen (smartMode 0, ongeveer 5 W); de volgende opdracht maakt hem wakker, wat ongeveer 1–2 s langer duurt. De omvormer met de ontlaadrol blijft wakker voor de volgende piek (zie de uren hieronder). 0 = altijd wakker. Gesimuleerd met de verliezen van de omvormers: ongeveer 850 Wh per dag minder in november, 230 Wh in de zomer.",
+          "ready_hours": "Met slapen aan blijft de omvormer met de ontlaadrol wakker om de volgende piek meteen op te vangen. Hier beperk je dat tot de uren met de meeste pieken (lokale tijd, bv. 7-9,12-13,17:30-19); daarbuiten mag hij ook slapen, en aan het begin van zo'n uur wordt hij gewekt. Leeg = altijd wakker. Gesimuleerd met verliezen: ongeveer 120 Wh per dag minder in november."
         }
       },
       "device_ips": {
@@ -691,11 +697,12 @@
       },
       "diagnostics": {
         "title": "Logging, simulatie en testdata",
-        "description": "Foutopsporingsopties. De P1-opname schrijft elke P1-waarde (elke seconde bij een direct uitgelezen HomeWizard P1-meter) met het batterijvermogen naar <config>/zendure_ha/p1_<datum>.csv, als testdata voor de simulatie. Hij schakelt zichzelf om middernacht uit.",
+        "description": "Foutopsporingsopties. De P1-opname schrijft elke P1-waarde (elke seconde bij een direct uitgelezen HomeWizard P1-meter) met het batterijvermogen naar <config>/zendure_ha/p1_<datum>.csv, als testdata voor de simulatie. Met de regelaarstatus staat op elke regel ook wat de manager en elk apparaat deden, en events_<datum>.csv bevat richtingwissels, commando's, moduswissels en waarschuwingen. Hij schakelt zichzelf om middernacht uit; oudere dagen worden gecomprimeerd.",
         "data": {
           "mqttlog": "MQTT-communicatie loggen",
           "simulation": "Simulatiemodus",
-          "p1_record": "P1 elke seconde opnemen tot middernacht (testdata)"
+          "p1_record": "P1 elke seconde opnemen tot middernacht (testdata)",
+          "p1_record_detail": "Ook de regelaarstatus opnemen (modus, setpoint, cycli, rollen en elk apparaat; ongeveer 2,5 keer groter)"
         }
       },
       "p1_token": {
@@ -703,6 +710,13 @@
         "description": "Om de P1-meter op {host} via API v2 uit te lezen is een token nodig. Druk op de knop van de P1-meter en klik binnen 30 seconden op Verzenden.\n\nOf vink API v1 aan: dan wordt de meter elke seconde via de Lokale API uitgelezen (zet \"Lokale API\" aan in de HomeWizard-app).",
         "data": {
           "use_v1": "API v1 (Lokale API) gebruiken in plaats van een token"
+        }
+      },
+      "solar": {
+        "title": "Zonvoorspelling",
+        "description": "Optioneel: een sensor met de zonvoorspelling van vandaag, bijvoorbeeld sensor.solcast_pv_forecast_forecast_today (de uren vanaf nu worden opgeteld) of sensor.solcast_pv_forecast_forecast_remaining_today. Daarmee slaan de batterijen op dagen dat ze niet vol raken elke Wh op: de exportmarge bij wisselende wolken en een negatief P1-doel worden dan niet gebruikt. Als er vandaag (bijna) geen zon meer verwacht wordt, staat de omvormer met de laadrol klaar om te ontladen in plaats van te wachten op laden. Leeg laten om uit te zetten.",
+        "data": {
+          "solar_forecast": "Sensor zonvoorspelling (kWh vandaag)"
         }
       }
     },
@@ -719,7 +733,8 @@
       "invalid_address": "Voer een geldig IP-adres of een geldige hostnaam in.",
       "homewizard_press_button": "De P1-meter gaf nog geen token: druk op de knop en klik binnen 30 seconden op Verzenden.",
       "homewizard_unreachable": "De HomeWizard P1-meter antwoordt niet op dit adres.",
-      "homewizard_v1_unreachable": "De P1-meter antwoordt niet via API v1: zet \"Lokale API\" aan in de HomeWizard-app."
+      "homewizard_v1_unreachable": "De P1-meter antwoordt niet via API v1: zet \"Lokale API\" aan in de HomeWizard-app.",
+      "invalid_hours": "Vul uren in zoals 7-9,12-13,17:30-19 (van-tot, gescheiden door komma's)."
     }
   },
   "issues": {
@@ -738,6 +753,14 @@
     "zensdk_no_address": {
       "title": "Geen adres bekend voor {name}",
       "description": "De Zendure-cloud gaf geen IP-adres voor {name}, dus probeerde de integratie de samengestelde naam {address}, die niet antwoordt. Vul het IP-adres van het apparaat in (Zendure-app, apparaatinformatie, of de DHCP-lijst van je router) bij Configureren, Apparaatadressen. Een vast DHCP-adres wordt aangeraden. Tot dan werkt het apparaat alleen met de verbinding op cloud."
+    },
+    "p1_stale": {
+      "title": "De P1-meter stuurt geen waarden",
+      "description": "Al meer dan een minuut kwam er geen P1-waarde binnen. De batterijen houden hun vermogen voorlopig vast; na 5 minuten vallen ze terug naar het basisverbruik van de laatste 10 minuten (alleen minder, nooit meer), zodat ze geen opgeslagen energie terugleveren en niet van het net laden. Controleer de P1-meter, zijn wifi en de HomeWizard-integratie. De melding verdwijnt zodra er weer waarden komen."
+    },
+    "second_controller": {
+      "title": "Een andere regelaar wijzigt {devices}",
+      "description": "De vermogenslimieten van {devices} zijn de laatste 15 minuten meermaals gewijzigd door iets anders dan deze integratie: een energieplan of slimme modus in de Zendure-app, een andere integratie of een automatisering. Twee regelaars werken elkaar tegen, wat energie kost en veel extra opdrachten geeft. Zet de andere uit. De melding verdwijnt na een uur zonder vreemde wijzigingen."
     }
   }
 }

@@ -17,9 +17,6 @@ from custom_components.zendure_ha.const import (
     CONF_MQTTSERVER,
     CONF_P1METER,
     CONF_SIM,
-    CONF_SLEW_DOWN,
-    CONF_SLEW_ENABLED,
-    CONF_SLEW_UP,
     CONF_TIMEFAST,
     CONF_TIMEZERO,
     DOMAIN,
@@ -43,29 +40,38 @@ async def _menu(hass, entry):  # noqa: ANN001
 
 async def test_menu_lists_all_groups(hass, entry) -> None:  # noqa: ANN001
     result = await _menu(hass, entry)
-    assert result["menu_options"] == ["connection", "mqtt", "p1_meter", "power_control", "slew", "lifetime", "device_ips", "diagnostics", "finish"]
+    assert result["menu_options"] == ["connection", "mqtt", "p1_meter", "power_control", "slew", "lifetime", "solar", "device_ips", "diagnostics", "finish"]
     assert result["description_placeholders"]["p1meter"] == "sensor.p1"
-    assert result["description_placeholders"]["slew"].startswith("600")
+    assert result["description_placeholders"]["slew"] == "6 s, 10 s"  # direction change delay, minimum run time
 
 
 async def test_slew_step_stores_values_and_returns_to_menu(hass, entry) -> None:  # noqa: ANN001
     result = await _menu(hass, entry)
     result = await hass.config_entries.options.async_configure(result["flow_id"], {"next_step_id": "slew"})
     assert result["type"] is FlowResultType.FORM and result["step_id"] == "slew"
-    values = {CONF_SLEW_ENABLED: True, CONF_SLEW_UP: 300, CONF_SLEW_DOWN: 900, CONF_FLIP_DELAY: 8, "min_run": 12, "ready_rate": 1500}
+    values = {CONF_FLIP_DELAY: 8, "min_run": 12}
     result = await hass.config_entries.options.async_configure(result["flow_id"], values)
     assert result["type"] is FlowResultType.MENU
-    assert entry.data[CONF_SLEW_UP] == 300 and entry.data[CONF_FLIP_DELAY] == 8
+    assert entry.data[CONF_FLIP_DELAY] == 8 and entry.data["min_run"] == 12
     assert entry.data[CONF_APPTOKEN] == "tok"  # untouched
 
 
 async def test_power_control_rejects_fast_longer_than_normal(hass, entry) -> None:  # noqa: ANN001
     result = await _menu(hass, entry)
     result = await hass.config_entries.options.async_configure(result["flow_id"], {"next_step_id": "power_control"})
-    values = {CONF_TIMEZERO: 4, CONF_TIMEFAST: 9, "p1_stddev_min": 15, "power_start": 50, "power_tolerance": 5, "manual_interval": 15, "peak_limit": 0, "export_bias": 100}
+    values = {CONF_TIMEZERO: 4, CONF_TIMEFAST: 9, "p1_stddev_min": 15, "power_start": 50, "power_tolerance": 5, "manual_interval": 15, "peak_limit": 0, "export_bias": 100, "jump_w": 400}
     result = await hass.config_entries.options.async_configure(result["flow_id"], values)
     assert result["type"] is FlowResultType.FORM
     assert result["errors"] == {CONF_TIMEFAST: "fast_longer_than_normal"}
+
+
+async def test_power_control_stores_the_peak_detection(hass, entry) -> None:  # noqa: ANN001
+    result = await _menu(hass, entry)
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {"next_step_id": "power_control"})
+    values = {CONF_TIMEZERO: 4, CONF_TIMEFAST: 2, "p1_stddev_min": 15, "power_start": 50, "power_tolerance": 5, "manual_interval": 15, "peak_limit": 0, "export_bias": 100, "jump_w": 600}
+    result = await hass.config_entries.options.async_configure(result["flow_id"], values)
+    assert result["type"] is FlowResultType.MENU
+    assert entry.data["jump_w"] == 600
 
 
 async def test_connection_step_validates_token(hass, entry) -> None:  # noqa: ANN001
@@ -106,9 +112,10 @@ async def test_finish_reloads_only_after_connection_change(hass, entry) -> None:
 async def test_lifetime_step_stores_values(hass, entry) -> None:  # noqa: ANN001
     result = await _menu(hass, entry)
     result = await hass.config_entries.options.async_configure(result["flow_id"], {"next_step_id": "lifetime"})
-    result = await hass.config_entries.options.async_configure(result["flow_id"], {"role_margin": 15, "fill_level": 80, "flash_safe_state": False})
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {"role_margin": 15, "fill_level": 80, "flash_safe_state": False, "sleep_after": 10})
     assert result["type"] is FlowResultType.MENU
     assert entry.data["role_margin"] == 15 and entry.data["fill_level"] == 80 and entry.data["flash_safe_state"] is False
+    assert entry.data["sleep_after"] == 10
 
 
 async def test_device_ips_validates_and_stores_addresses(hass, entry) -> None:  # noqa: ANN001
@@ -185,3 +192,28 @@ async def test_overview_in_the_language_of_home_assistant(hass, entry) -> None: 
     assert placeholders["lifetime"].startswith("spreiddrempel 70%")
     assert placeholders["p1meter"] == "sensor.p1 + HomeWizard 192.168.1.151 (API v1, niet actief)"
     assert placeholders["logging"] == "uit"
+
+
+async def test_solar_step_stores_and_clears_the_sensor(hass, entry) -> None:  # noqa: ANN001
+    result = await _menu(hass, entry)
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {"next_step_id": "solar"})
+    assert result["type"] is FlowResultType.FORM and result["step_id"] == "solar"
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {"solar_forecast": "sensor.solcast_pv_forecast_forecast_today"})
+    assert result["type"] is FlowResultType.MENU
+    assert entry.data["solar_forecast"] == "sensor.solcast_pv_forecast_forecast_today"
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {"next_step_id": "solar"})
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {})  # emptied
+    assert entry.data["solar_forecast"] == ""
+
+
+async def test_lifetime_step_checks_the_ready_hours(hass, entry) -> None:  # noqa: ANN001
+    result = await _menu(hass, entry)
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {"next_step_id": "lifetime"})
+    values = {"role_margin": 10, "fill_level": 85, "flash_safe_state": True, "sleep_after": 10}
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {**values, "ready_hours": "7 tot 9"})
+    assert result["type"] is FlowResultType.FORM and result["errors"] == {"ready_hours": "invalid_hours"}
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {**values, "ready_hours": " 7-9,17:30-19 "})
+    assert result["type"] is FlowResultType.MENU and entry.data["ready_hours"] == "7-9,17:30-19"
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {"next_step_id": "lifetime"})
+    result = await hass.config_entries.options.async_configure(result["flow_id"], values)  # emptied
+    assert entry.data["ready_hours"] == ""

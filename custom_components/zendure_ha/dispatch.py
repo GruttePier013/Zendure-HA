@@ -14,6 +14,8 @@ from math import sqrt
 
 DEFAULT_ROLE_MARGIN = 10  # SoC points a device must lead before a role moves to it
 ROLE_HOLD = 300  # seconds a role is kept at least before it may move again
+ROLE_GUARD = 10  # usable SoC points: a role holder this close to its limit gives the role away at once (1.6.5)
+ROLE_GUARD_LEAD = 3  # ... to a device that leads by at least this much (so two almost empty devices do not swap)
 
 
 class P1Tracker:
@@ -85,7 +87,11 @@ class RoleSelector:
         self.discharger = self.charger = None
 
     def update(self, dischargeable: Sequence[tuple[str, int]], chargeable: Sequence[tuple[str, int]]) -> None:
-        """Update the roles from the (id, SoC) of the devices that can discharge / charge."""
+        """Update the roles from the (id, SoC) of the devices that can discharge / charge.
+
+        The manager passes the usable SoC: for discharging the SoC above the lower limit (minSoc), for charging
+        the SoC plus the room below the upper limit (100 - socSet), so the device with the most room has the lowest value.
+        """
         now = self._clock()
         self.discharger, self._since_discharger = self._pick(self.discharger, self._since_discharger, dischargeable, True, now)
 
@@ -104,6 +110,12 @@ class RoleSelector:
         lead = best_soc - socs[current] if highest else socs[current] - best_soc
         if best_id != current and lead >= self.margin and now - since >= self.hold:
             return best_id, now
+        # 1.6.5: the role holder is almost empty (or almost full for the charge role): the role moves at once,
+        # without the margin and the hold time, to a device that has clearly more room (4 November: L2 kept the
+        # discharge role at 7 % while L1 and L3 charged at 17 %, with a margin of 15)
+        near_limit = socs[current] < ROLE_GUARD if highest else socs[current] > 100 - ROLE_GUARD
+        if best_id != current and near_limit and lead >= ROLE_GUARD_LEAD:
+            return best_id, now
         return current, since
 
     @property
@@ -121,6 +133,7 @@ EDGE_SHARE = 0.5  # the edge threshold is this share of the recent peak surplus,
 EDGE_WINDOW = 15.0  # s
 VOLATILE_WINDOW = 600.0  # s: period in which the edges are counted
 VOLATILE_EDGES = 6  # edges in VOLATILE_WINDOW (an appliance on + off is 2 edges, a passing cloud too)
+VOLATILE_OFF_EDGES = 4  # 1.6.5: the mode ends only at this many edges or fewer (6 on / 5 off flapped within seconds; 4 simulated best)
 SUN_WINDOW = 900.0  # s: period of the peak surplus
 SUN_MIN = 200  # W: below this peak surplus there is no sun to speak of: no cloud mode (evening, night)
 
@@ -138,6 +151,7 @@ class Volatility:
         self._samples: deque[tuple[float, int]] = deque()
         self._edges: deque[float] = deque()
         self._last_edge = float("-inf")
+        self._active = False
         self._surplus: deque[tuple[float, int]] = deque()  # (t, surplus) with a falling maximum
 
     def add(self, t: float, demand: int) -> None:
@@ -158,6 +172,12 @@ class Volatility:
             self._last_edge = t
         while self._edges and t - self._edges[0] > VOLATILE_WINDOW:
             self._edges.popleft()
+        if self.peak_surplus < SUN_MIN:
+            self._active = False  # no sun to speak of (evening): no cloud mode
+        elif not self._active and len(self._edges) >= VOLATILE_EDGES:
+            self._active = True
+        elif self._active and len(self._edges) <= VOLATILE_OFF_EDGES:
+            self._active = False
 
     @property
     def peak_surplus(self) -> int:
@@ -175,4 +195,40 @@ class Volatility:
 
     @property
     def active(self) -> bool:
-        return len(self._edges) >= VOLATILE_EDGES and self.peak_surplus >= SUN_MIN
+        """On at VOLATILE_EDGES edges, off at VOLATILE_OFF_EDGES or fewer, or when the sun is gone."""
+        return self._active
+
+
+def parse_hours(text: str) -> list[tuple[float, float]]:
+    """Hours of the day from text like "7-9, 12-13, 17:30-19" (local time); "" gives []. ValueError when invalid."""
+    out: list[tuple[float, float]] = []
+    for part in str(text or "").replace(";", ",").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "-" not in part:
+            raise ValueError(part)
+        start, end = (_hour(x) for x in part.split("-", 1))
+        if not 0 <= start < end <= 24:
+            raise ValueError(part)
+        out.append((start, end))
+    return out
+
+
+def _hour(text: str) -> float:
+    text = text.strip()
+    if ":" in text:
+        h, m = text.split(":", 1)
+        hours, minutes = int(h), int(m)
+        if not 0 <= minutes < 60:
+            raise ValueError(text)
+        return hours + minutes / 60
+    return float(int(text))
+
+
+def in_hours(hours: Sequence[tuple[float, float]], when: datetime) -> bool:
+    """True when ``when`` (local time) falls in one of the hours; an empty list means always."""
+    if not hours:
+        return True
+    h = when.hour + when.minute / 60
+    return any(a <= h < b for a, b in hours)

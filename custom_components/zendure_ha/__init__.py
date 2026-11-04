@@ -4,12 +4,13 @@ import logging
 
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import device_registry as dr, entity_registry as er
+from homeassistant.loader import async_get_integration
 
 from .api import Api
 from .binary_sensor import ZendureBinarySensor
 from .button import ZendureButton
-from .const import CONF_MQTTLOG, CONF_P1METER, CONF_SIM
+from .const import CONF_MQTTLOG, CONF_P1METER, CONF_SIM, DOMAIN, RETIRED_ENTITIES, RETIRED_SETTINGS
 from .device import ZendureDevice
 from .entity import EntityDevice
 from .manager import ZendureConfigEntry, ZendureManager
@@ -29,8 +30,23 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ZendureConfigEntry) ->
     if entry.version == 1 and entry.minor_version < 8:
         _LOGGER.info("Migrating Zendure config entry from version %s.%s", entry.version, entry.minor_version)
         await Migration.async_migrate(hass, entry.entry_id)
-    hass.config_entries.async_update_entry(entry, version=1, minor_version=8)
+    if entry.version == 1 and entry.minor_version < 9:
+        # 1.6.0: the integration no longer limits the ramp of the inverters (they ramp by themselves)
+        data = {k: v for k, v in entry.data.items() if k not in RETIRED_SETTINGS}
+        hass.config_entries.async_update_entry(entry, data=data)
+    hass.config_entries.async_update_entry(entry, version=1, minor_version=9)
     return True
+
+
+def remove_retired_entities(hass: HomeAssistant, entry: ZendureConfigEntry) -> int:
+    """Remove the entities that the integration no longer creates (they would stay as 'not provided')."""
+    registry = er.async_get(hass)
+    retired = [e for e in er.async_entries_for_config_entry(registry, entry.entry_id) if e.unique_id.endswith(RETIRED_ENTITIES)]
+    for entity in retired:
+        registry.async_remove(entity.entity_id)
+    if retired:
+        _LOGGER.info("Removed %s entities that are no longer used: %s", len(retired), ", ".join(e.entity_id for e in retired))
+    return len(retired)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ZendureConfigEntry) -> bool:
@@ -41,7 +57,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ZendureConfigEntry) -> b
     in a queue (EntityAdder) until the platforms are forwarded.
     """
     await EntityDevice.async_load_translations(hass)
+    remove_retired_entities(hass, entry)
     manager = ZendureManager(hass, entry)
+    # the version for the meta file of a P1 recording: the loader read manifest.json already (reading it here would block)
+    manager.integration_version = str((await async_get_integration(hass, DOMAIN)).version or "?")
     try:
         await manager.loadDevices()
     except BaseException:

@@ -83,9 +83,6 @@
       "hems_state": {
         "name": "HEMS Active"
       },
-      "slew_active": {
-        "name": "Ramping (slew limited)"
-      },
       "mqtt_cloud": {
         "name": "Cloud MQTT connected"
       },
@@ -112,8 +109,8 @@
       "soc_set": {
         "name": "Target SoC"
       },
-      "slew_factor": {
-        "name": "Slew rate factor"
+      "p1_target": {
+        "name": "P1 target (band)"
       }
     },
     "sensor": {
@@ -404,6 +401,9 @@
       "p1_value": {
         "name": "P1 value"
       },
+      "p1_rate": {
+        "name": "P1 values per minute"
+      },
       "dispatch_setpoint": {
         "name": "Dispatch setpoint"
       },
@@ -419,8 +419,8 @@
       "devices_idle": {
         "name": "Devices idle"
       },
-      "devices_ramping": {
-        "name": "Devices ramping"
+      "devices_sleep": {
+        "name": "Devices asleep"
       },
       "flash_writes": {
         "name": "Flash writes"
@@ -440,6 +440,7 @@
           "charging": "Charging",
           "discharging": "Discharging",
           "standby": "Standby",
+          "sleeping": "Asleep",
           "reserve": "Standby (cloud reserve)",
           "not_responding": "Not responding"
         }
@@ -602,14 +603,15 @@
     "step": {
       "init": {
         "title": "Zendure HA-GP013 settings",
-        "description": "P1 sensor: {p1meter}\nToken: {token}\nMQTT: {mqtt}\nPower control (normal / fast): {control}\nSlew rate (up / down, direction change delay): {slew}\nMultiple inverters: {lifetime}\nFixed device addresses: {addresses}\nMQTT logging: {logging}, simulation: {simulation}\n\nChoose the settings you want to change.",
+        "description": "P1 sensor: {p1meter}\nToken: {token}\nMQTT: {mqtt}\nPower control (normal / fast): {control}\nDirection change (delay, minimum run time): {slew}\nMultiple inverters: {lifetime}\nSolar forecast: {solar}\nFixed device addresses: {addresses}\nMQTT logging: {logging}, simulation: {simulation}\n\nChoose the settings you want to change.",
         "menu_options": {
           "connection": "Account / token",
           "mqtt": "MQTT & Wi-Fi",
           "p1_meter": "P1 meter",
           "power_control": "Power control",
-          "slew": "Slew rate & direction change",
+          "slew": "Direction change protection",
           "lifetime": "Multiple inverters (spread & roles)",
+          "solar": "Solar forecast",
           "device_ips": "Device addresses",
           "diagnostics": "Logging, simulation and test data",
           "finish": "Save and close"
@@ -658,19 +660,19 @@
           "power_tolerance": "Device power tolerance (W)",
           "manual_interval": "Update interval in manual mode (s)",
           "peak_limit": "Peak shaving limit (W, 0 = off)",
-          "export_bias": "Export margin while charging during changing clouds (W, 0 = off)"
+          "export_bias": "Export margin while charging during changing clouds (W, 0 = off)",
+          "jump_w": "Peak detection: P1 jump that starts a cycle at once (W, 0 = off)"
+        },
+        "data_description": {
+          "jump_w": "When the import or export grew by this much since the last control cycle (a kettle or hob switching on, or off while the batteries discharge), the next cycle starts at once instead of after the fast interval. A load that builds up is detected as soon as this much is added. The response of the batteries never counts as a jump."
         }
       },
       "slew": {
-        "title": "Slew rate & direction change",
-        "description": "Limits how fast the commanded power changes, and always passes through 0 W (with a short pause) when switching between charging and discharging. This protects relays and inverter. Values are defaults and not firmware specifications. The device that is kept ready for peaks may start faster from standby; direction changes always use the normal rate. A direction change is released after 2 s as soon as the device reports 0 W, otherwise after the maximum pause.",
+        "title": "Direction change protection",
+        "description": "The inverter ramps its power by itself (about 250 W/s for a SolarFlow 2400 AC+), the integration does not limit that any more. A change between charging and discharging always passes through a confirmed 0 W and waits at least the delay below when 0 W is not confirmed. A started inverter keeps running at a low power for the minimum run time, so a short disturbance does not make the relay chatter.",
         "data": {
-          "slew_enabled": "Limit the power change rate",
-          "slew_up": "Maximum increase (W/s)",
-          "slew_down": "Maximum decrease (W/s)",
-          "flip_delay": "Maximum pause at 0 W when changing direction, without a confirmed 0 W (s)",
-          "min_run": "Minimum run time of a started device (s)",
-          "ready_rate": "Faster ramp: start of the ready device and devices already running in the same direction (W/s)"
+          "flip_delay": "Delay before a change of direction when 0 W is not confirmed (s)",
+          "min_run": "Minimum run time of a started device (s)"
         }
       },
       "lifetime": {
@@ -679,10 +681,14 @@
         "data": {
           "role_margin": "Role switch margin (SoC %)",
           "fill_level": "Spread threshold (%)",
-          "flash_safe_state": "Store the safe state (0 W) in device flash"
+          "flash_safe_state": "Store the safe state (0 W) in device flash",
+          "sleep_after": "Let idle inverters sleep after (min, 0 = off)",
+          "ready_hours": "Keep the discharger awake only at (hours, e.g. 7-9,12-13,17-19)"
         },
         "data_description": {
-          "fill_level": "Load per inverter before power is spread over one more inverter; below it, it is merged onto fewer. 85% with 3 × 2400 W: 1 inverter up to about 1900–2000 W. While clouds change quickly, 70% is used."
+          "fill_level": "Load per inverter before power is spread over one more inverter; below it, it is merged onto fewer. 85% with 3 × 2400 W: 1 inverter up to about 1900–2000 W. While clouds change quickly, 70% is used.",
+          "sleep_after": "An idle Zendure inverter keeps using about 30 W while it waits for commands (smartMode 1). After this many minutes at 0 W it is put to sleep (smartMode 0, about 5 W); the next command wakes it, which takes about 1–2 s longer. The inverter with the discharge role stays awake for the next peak (see the hours below). 0 = always awake. Simulated with the losses of the inverters: about 850 Wh per day less in November, 230 Wh in summer.",
+          "ready_hours": "With sleep on, the inverter with the discharge role stays awake to cover the next peak at once. Here you can limit that to the hours with the most peaks (local time, e.g. 7-9,12-13,17:30-19); outside them it may sleep too, and at the start of such an hour it is woken. Empty = always awake. Simulated with losses: about 120 Wh per day less in November."
         }
       },
       "device_ips": {
@@ -691,11 +697,12 @@
       },
       "diagnostics": {
         "title": "Logging, simulation and test data",
-        "description": "Debug options. The P1 recording writes every P1 value (every second with a directly read HomeWizard P1 meter) with the battery power to <config>/zendure_ha/p1_<date>.csv, as test data for the simulation. It switches itself off at midnight.",
+        "description": "Debug options. The P1 recording writes every P1 value (every second with a directly read HomeWizard P1 meter) with the battery power to <config>/zendure_ha/p1_<date>.csv, as test data for the simulation. With the control state, every line also shows what the manager and every device did, and events_<date>.csv lists changes of direction, commands, mode changes and warnings. It switches itself off at midnight; older days are compressed.",
         "data": {
           "mqttlog": "Log MQTT communication",
           "simulation": "Simulation mode",
-          "p1_record": "Record P1 every second until midnight (test data)"
+          "p1_record": "Record P1 every second until midnight (test data)",
+          "p1_record_detail": "Record the control state too (mode, setpoint, cycles, roles and every device; about 2.5 times larger)"
         }
       },
       "p1_token": {
@@ -703,6 +710,13 @@
         "description": "To read the P1 meter at {host} via API v2, a token is needed. Press the button on the P1 meter and click Submit within 30 seconds.\n\nOr tick API v1: then the meter is read every second via the Local API (switch \"Local API\" on in the HomeWizard app).",
         "data": {
           "use_v1": "Use API v1 (Local API) instead of a token"
+        }
+      },
+      "solar": {
+        "title": "Solar forecast",
+        "description": "Optional: a sensor with the solar forecast of today, e.g. sensor.solcast_pv_forecast_forecast_today (the hours from now on are added up) or sensor.solcast_pv_forecast_forecast_remaining_today. With it the batteries store every Wh on days they will not be full: the export margin during changing clouds and a negative P1 target are not used then. When (almost) no more sun is expected today, the inverter with the charge role is ready to discharge instead of waiting to charge. Leave empty to switch it off.",
+        "data": {
+          "solar_forecast": "Solar forecast sensor (kWh today)"
         }
       }
     },
@@ -719,7 +733,8 @@
       "invalid_address": "Enter a valid IP address or hostname.",
       "homewizard_press_button": "The P1 meter did not give a token yet: press its button and click Submit within 30 seconds.",
       "homewizard_unreachable": "The HomeWizard P1 meter does not answer at this address.",
-      "homewizard_v1_unreachable": "The P1 meter does not answer via API v1: switch \"Local API\" on in the HomeWizard app."
+      "homewizard_v1_unreachable": "The P1 meter does not answer via API v1: switch \"Local API\" on in the HomeWizard app.",
+      "invalid_hours": "Enter hours like 7-9,12-13,17:30-19 (from-to, separated by commas)."
     }
   },
   "issues": {
@@ -738,6 +753,14 @@
     "zensdk_no_address": {
       "title": "No address known for {name}",
       "description": "The Zendure cloud did not return an IP address for {name}, so the integration tried the constructed name {address}, which does not answer. Enter the IP address of the device (Zendure app, device information, or the DHCP list of your router) in Configure, Device addresses. A fixed DHCP lease is recommended. Until then the device can only be used with the connection set to cloud."
+    },
+    "p1_stale": {
+      "title": "The P1 meter sends no values",
+      "description": "For more than a minute no P1 value arrived. The batteries keep their power for now; after 5 minutes they fall back to the base load of the last 10 minutes (only ever less, never more), so they do not export stored energy or import to charge. Check the P1 meter, its Wi-Fi and the HomeWizard integration. The issue disappears when values arrive again."
+    },
+    "second_controller": {
+      "title": "Another controller changes {devices}",
+      "description": "The power limits of {devices} were changed several times by something else than this integration in the last 15 minutes: an energy plan or smart mode in the Zendure app, another integration or an automation. Two controllers work against each other, which costs energy and causes many extra commands. Switch the other one off. The issue disappears after an hour without foreign changes."
     }
   }
 }

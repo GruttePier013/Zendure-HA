@@ -57,7 +57,8 @@ async def test_recording_runs_on_the_stored_day_only(hass, tmp_path) -> None:  #
     manager.p1record.add(300, 0, "homewizard")
     assert manager.p1record.lines == 1
 
-    manager._p1_record_done()  # midnight
+    await manager.p1record.stop()  # midnight: the recorder writes what is left (as in P1Recorder._midnight) ...
+    manager._p1_record_done()  # ... and tells the manager
     assert manager.p1record is None
     assert entry.data[CONF_P1_RECORD] == ""
 

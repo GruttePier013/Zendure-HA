@@ -157,7 +157,7 @@ class HomeWizardP1:
         hass: HomeAssistant,
         host: str,
         token: str | None,
-        on_value: Callable[[int], Awaitable[None]],
+        on_value: Callable[[int, int], Awaitable[None]],
         resolve: Callable[[], str | None] | None = None,
     ) -> None:
         self._hass = hass
@@ -167,7 +167,7 @@ class HomeWizardP1:
         self._resolve = resolve
         self._task: asyncio.Task | None = None
         self._worker: asyncio.Task | None = None
-        self._latest: int | None = None
+        self._latest: tuple[int, float] | None = None  # (power, monotonic time it arrived)
         self.failures = 0
         self.readings = 0
         self.last_value = 0.0  # monotonic time of the last value
@@ -198,15 +198,16 @@ class HomeWizardP1:
         self.failures = 0
         self.readings += 1
         self.last_value = monotonic()
-        self._latest = power
+        self._latest = (power, monotonic())
         if self._worker is None or self._worker.done():
             self._worker = self._hass.async_create_background_task(self._drain(), "zendure_ha P1 value")
 
     async def _drain(self) -> None:
-        while (power := self._latest) is not None:
+        while (latest := self._latest) is not None:
             self._latest = None
+            power, arrived = latest
             try:
-                await self._on_value(power)
+                await self._on_value(power, int((monotonic() - arrived) * 1000))
             except Exception:
                 _LOGGER.exception("Processing P1 value %s failed", power)
 

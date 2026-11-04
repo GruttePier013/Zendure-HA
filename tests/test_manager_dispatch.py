@@ -49,9 +49,8 @@ class _FakeDevice:
         self.charge_calls.append(power)
         return power
 
-    async def power_discharge(self, power: int, ready: bool = False) -> int:
+    async def power_discharge(self, power: int) -> int:
         self.discharge_calls.append(power)
-        self.ready_calls = [*getattr(self, "ready_calls", []), ready]
         return power
 
 

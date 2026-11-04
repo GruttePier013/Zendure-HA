@@ -33,11 +33,12 @@ from paho.mqtt import client as mqtt_client
 from .binary_sensor import ZendureBinarySensor
 from .button import ZendureButton
 from .const import DOMAIN, DeviceState, Flash, Http, SmartMode
+from . import events
 from .entity import POWER_DEADBAND, EntityDevice, EntityZendure, quiet
-from .number import ZendureNumber, ZendureRestoreNumber
+from .number import ZendureNumber
 from .select import ZendureRestoreSelect, ZendureSelect
 from .sensor import ZendureRestoreSensor, ZendureSensor
-from .slew import DEFAULT_DOWN, DEFAULT_FLIP_DELAY, DEFAULT_MIN_RUN, DEFAULT_READY_UP, DEFAULT_UP, ZERO_BAND, SlewLimiter
+from .slew import ZERO_BAND, SlewLimiter
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -155,7 +156,6 @@ class ZendureDevice(EntityDevice):
         self.state: DeviceState = DeviceState.OFFLINE
         self.exports_bypass: bool = True
         self.slew = SlewLimiter()
-        self._slew_base: tuple[float, float, float, float, float] = (DEFAULT_UP, DEFAULT_DOWN, DEFAULT_FLIP_DELAY, DEFAULT_MIN_RUN, DEFAULT_READY_UP)
         self._lastMessageUpdate = datetime.min
 
         # flash / RAM protection of the device
@@ -243,20 +243,14 @@ class ZendureDevice(EntityDevice):
         self.commandPower = ZendureSensor(self, "commandPower", None, "W", "power", "measurement", 0, state=0, category=diag)
         self.commandCount = ZendureSensor(self, "commandCount", None, None, None, "total_increasing", 0, state=0, category=diag)
         self.command_total = 0
-        self.slewActive = ZendureBinarySensor(self, "slewActive", None, None, category=diag)
         self.flashWrites = ZendureSensor(self, "flashWrites", None, None, None, "total_increasing", 0, state=0, category=diag)
         # what the device does now and which role it has (set by the manager every control cycle)
         self.activity = ZendureSensor(self, "activity", None, None, "enum", None, category=diag)
-        self.activity._attr_options = ["charging", "discharging", "standby", "reserve", "not_responding"]
+        self.activity._attr_options = ["charging", "discharging", "standby", "sleeping", "reserve", "not_responding"]
         self.role = ZendureSensor(self, "role", None, None, "enum", None, category=diag)
         self.role._attr_options = ["charge", "discharge", "none"]
         # high frequency diagnostics are disabled by default: every state change is a row in the recorder database
         quiet(self.lastMessage, self.commandPower, self.commandCount)
-
-        # per device scaling of the slew rate (100 % = the global setting)
-        self.slewFactor = ZendureRestoreNumber(self, "slewFactor", self._slew_factor_changed, None, "%", None, 300, 10, NumberMode.BOX, True)
-        self.slewFactor._attr_native_value = 100
-        self.slewFactor._attr_entity_category = EntityCategory.CONFIG
 
     def setLimits(self, charge: int, discharge: int) -> None:
         """Set the device limits."""
@@ -301,6 +295,8 @@ class ZendureDevice(EntityDevice):
             return True
 
         self._reported[key] = value
+        if key in ("outputLimit", "inputLimit"):
+            self._check_foreign(key, value)
         changed = super().entityUpdate(key, value)
         try:
             if changed:
@@ -461,21 +457,8 @@ class ZendureDevice(EntityDevice):
         self.flash_count += 1
         self.flashWrites.update_value(self.flash_count)
 
-    def _slew_factor_changed(self, _entity: Any, _value: Any) -> None:
-        self._apply_slew()
-
-    def configure_slew(self, enabled: bool, up: float, down: float, flip_delay: float, min_run: float, ready_up: float = DEFAULT_READY_UP) -> None:
-        """Apply the global slew settings; the per device factor scales the rates."""
-        self.slew.enabled = enabled
-        self._slew_base = (up, down, flip_delay, min_run, ready_up)
-        self._apply_slew()
-
-    def _apply_slew(self) -> None:
-        factor = (self.slewFactor.asNumber or 100) / 100
-        up, down, flip_delay, min_run, ready_up = self._slew_base
-        self.slew.up = up * factor
-        self.slew.down = down * factor
-        self.slew.ready_up = ready_up * factor
+    def configure_slew(self, flip_delay: float, min_run: float) -> None:
+        """Apply the direction change protection settings (the inverter ramps the power by itself)."""
         self.slew.flip_delay = flip_delay
         self.slew.min_run = min_run
 
@@ -833,15 +816,15 @@ class ZendureDevice(EntityDevice):
         else:
             self.state = DeviceState.INACTIVE
 
+        measured = self.homeOutput.asInt - self.homeInput.asInt
         if self.state == DeviceState.OFFLINE:
             self.slew.reset()
             self.commandPower.update_value(0)
         else:
-            measured = self.homeOutput.asInt - self.homeInput.asInt
             self.slew.sync(measured)
             self.slew.measure(measured)
             await self._follow_battery_limit(measured)
-        self.slewActive.update_value(1 if self.slew.pending else 0)
+        self._check_events(measured)
 
         return self.state != DeviceState.OFFLINE
 
@@ -868,10 +851,12 @@ class ZendureDevice(EntityDevice):
         return 0
 
     async def power_charge(self, power: int) -> int:
-        """Set charge power (negative value), limited by the slew rate."""
-        power = self.slew.limit(min(0, max(power, self.charge_limit)))
+        """Set charge power (negative value); a change of direction passes through 0 W first."""
+        target = min(0, max(power, self.charge_limit))
+        power = self.slew.limit(target)
+        self._track_direction(target)
         if power > 0:
-            # still ramping down a discharge: never charge before the output reached 0 W
+            # still holding a discharge (minimum run time): never charge before the output reached 0 W
             await self._apply_discharge(power)
             return 0
         return await self._apply_charge(power)
@@ -886,17 +871,20 @@ class ZendureDevice(EntityDevice):
         self.command_time = monotonic()
         self.commandCount.update_value(self.command_total)
         self._off_sent = False
+        self._command_event(power)
         return await self.charge(power)
 
     async def discharge(self, _power: int) -> int:
         """Set the power output/input."""
         return 0
 
-    async def power_discharge(self, power: int, ready: bool = False) -> int:
-        """Set discharge power, limited by the slew rate. ``ready`` marks the start of the device kept ready for peaks."""
-        power = self.slew.limit(max(0, min(power, self.discharge_limit)), ready=ready)
+    async def power_discharge(self, power: int) -> int:
+        """Set discharge power; a change of direction passes through 0 W first."""
+        target = max(0, min(power, self.discharge_limit))
+        power = self.slew.limit(target)
+        self._track_direction(target)
         if power < 0:
-            # still ramping down a charge: never discharge before the input reached 0 W
+            # still holding a charge (minimum run time): never discharge before the input reached 0 W
             await self._apply_charge(power)
             return 0
         return await self._apply_discharge(power)
@@ -910,28 +898,161 @@ class ZendureDevice(EntityDevice):
         self.command_time = monotonic()
         self.commandCount.update_value(self.command_total)
         self._off_sent = False
+        self._command_event(power)
         return await self.discharge(power)
 
-    async def power_off_ramped(self) -> bool:
-        """Ramp the power down to 0 W in steps, then switch off. Returns True while still ramping."""
-        if not self.slew.enabled or not self.online:
-            self.slew.reset()
-            await self.switch_off()
-            return False
+    # ------------------------------------------------------------------------------------------
+    # events (events.py): commands, changes of direction, abrupt stops, online / offline
+    # ------------------------------------------------------------------------------------------
+    # ------------------------------------------------------------------------------------------
+    # sleep (smartMode 0) and writes of another controller
+    # ------------------------------------------------------------------------------------------
+    asleep: bool = False
 
-        self.slew.sync(self.homeOutput.asInt - self.homeInput.asInt)
-        if abs(self.slew.current) >= ZERO_BAND and (power := self.slew.limit(0, hold=False)) != 0:
-            _LOGGER.debug("Ramping down %s => %sW", self.name, power)
-            self.commandPower.update_value(power)
-            await (self.charge(power) if power < 0 else self.discharge(power))
-            self.slewActive.update_value(1)
-            return True
+    async def sleep(self) -> bool:
+        """Let an idle inverter sleep: smartMode 0 with the limits already at 0 W (zenSDK devices only)."""
+        return False
 
+    async def wake(self) -> bool:
+        """Wake a sleeping inverter without a power command (zenSDK devices only)."""
+        return False
+
+    def _check_foreign(self, key: str, value: Any) -> None:
+        """A reported limit that differs from the one we sent, a while after our last command: another controller."""
+        sent = getattr(self, "limits_sent", None)
+        if sent is None:
+            return
+        index = 0 if key == "outputLimit" else 1
+        try:
+            reported = int(value)
+        except (TypeError, ValueError):
+            return
+        now = monotonic()
+        confirmed = self.__dict__.setdefault("_limit_confirmed", {})
+        if abs(reported - sent[index]) <= SmartMode.FOREIGN_TOLERANCE:
+            confirmed[key] = sent[index]  # the device took our value
+            return
+        if now - getattr(self, "command_time", -1e9) < SmartMode.FOREIGN_GRACE:
+            return
+        if confirmed.get(key) != sent[index]:
+            return  # our value was never reported back (the device rounds or clamps it): not a foreign write
+        confirmed.pop(key)  # one count per change; counted again when our next value was taken and changed again
+        writes = [t for t in getattr(self, "foreign_writes", []) if now - t < SmartMode.FOREIGN_WINDOW] + [now]
+        self.foreign_writes = writes
+        events.emit("foreign_write", self.name, key=key, sent=sent[index], reported=reported, count=len(writes))
+        if len(writes) == SmartMode.FOREIGN_COUNT:
+            _LOGGER.warning(
+                "%s: %s was changed by someone else %s times in %s minutes (an energy plan in the Zendure app, or another integration?)",
+                self.name,
+                key,
+                len(writes),
+                int(SmartMode.FOREIGN_WINDOW / 60),
+            )
+
+    def _command_event(self, power: int) -> None:
+        """A command with another power than the previous one (cmd_sent)."""
+        if power != getattr(self, "_last_event_power", None):
+            self._last_event_power = power
+            events.emit("cmd_sent", self.name, power=power, ac_mode="input" if power < 0 else "output" if power > 0 else "-")
+
+    def _track_direction(self, target: int) -> None:
+        """Follow a change of direction of this device from the request until it runs the other way."""
+        from .slew import ZERO_BAND
+
+        now = monotonic()
+        direction = (target > ZERO_BAND) - (target < -ZERO_BAND)
+        last_dir = self.slew._last_dir  # noqa: SLF001
+        change = getattr(self, "dir_change", None)
+        if change is None:
+            if direction != 0 and last_dir != 0 and direction != last_dir and (abs(self.slew.current) >= ZERO_BAND or not self.slew.flip_released()):
+                ctx = events.context()
+                self.dir_change = {"from": last_dir, "to": direction, "start": now, "warned": False}
+                events.emit(
+                    "dir_start",
+                    self.name,
+                    **{"from": _dir_name(last_dir), "to": _dir_name(direction)},
+                    reason="mode" if ctx.get("mode") in ("charge", "discharge", "store_solar") else "p1",
+                    setpoint=ctx.get("setpoint"),
+                    role=ctx.get("role", {}).get(self.name, "none"),
+                    pause=self.slew.flip_delay,
+                )
+            return
+        if direction == change["from"]:
+            self._end_direction("cancelled", now)
+        elif direction == change["to"] and self.slew.current * direction >= ZERO_BAND:
+            self._end_direction("measurement" if self.slew._zero_confirmed else "timeout", now)  # noqa: SLF001
+
+    def _end_direction(self, confirmed: str, now: float) -> None:
+        change = self.dir_change
+        self.dir_change = None
+        self.last_dir_change_s = round(now - change["start"], 1)
+        events.emit(
+            "dir_end", self.name, **{"from": _dir_name(change["from"]), "to": _dir_name(change["to"])}, confirmed=confirmed, duration=self.last_dir_change_s
+        )
+
+    def _direction_phase(self) -> str:
+        """What a change of direction is waiting for (for the slow warning)."""
+        from .slew import ZERO_BAND
+
+        if abs(self.slew.current) >= ZERO_BAND:
+            return f"ramping down from {self.slew.current} W"
+        if self.slew._still_running:  # noqa: SLF001
+            return f"waiting for 0 W: the device still reports {self.homeOutput.asInt - self.homeInput.asInt} W"
+        if not self.slew._zero_confirmed:  # noqa: SLF001
+            return "waiting for a report that confirms 0 W (or the pause)"
+        return "released, waiting for a start command (none came: no demand in the new direction?)"
+
+    def _check_events(self, measured: int) -> None:
+        """Called every control cycle: slow direction changes, abrupt stops, online / offline."""
+        from .slew import ZERO_BAND
+
+        now = monotonic()
+        offline = self.state == DeviceState.OFFLINE
+        if offline != getattr(self, "_event_offline", None):
+            if getattr(self, "_event_offline", None) is not None:
+                events.emit("offline" if offline else "online", self.name, soc=self.electricLevel.asInt)
+            self._event_offline = offline
+
+        if (change := getattr(self, "dir_change", None)) is not None and abs(self.slew.current) < ZERO_BAND and self.slew.flip_released():
+            # released, but no start in the new direction (the demand went away): not a slow change of direction
+            if change.setdefault("released", now) and now - change["released"] > DIR_NOT_NEEDED:
+                self._end_direction("not_needed", now)
+                change = None
+        if change is not None and "released" not in change and not change["warned"] and now - change["start"] > events.DIR_SLOW:
+            change["warned"] = True
+            phase = self._direction_phase()
+            backoff = getattr(self, "_http_failures", 0)
+            _LOGGER.warning(
+                "%s: change of direction from %s to %s takes %s s: %s%s",
+                self.name,
+                _dir_name(change["from"]),
+                _dir_name(change["to"]),
+                round(now - change["start"]),
+                phase,
+                f" (HTTP back-off after {backoff} failed requests)" if backoff else "",
+            )
+            events.emit("dir_slow", self.name, seconds=round(now - change["start"]), phase=phase, http_failures=backoff)
+
+        prev = getattr(self, "_event_measure", None)
+        self._event_measure = (now, measured, self.slew.current)
+        if prev is not None and now - prev[0] <= 5.0 and abs(prev[1]) - abs(measured) > events.ABRUPT_W and prev[2] == self.slew.current and abs(measured) < abs(prev[1]):
+            events.emit(
+                "stop_abrupt",
+                self.name,
+                before=prev[1],
+                after=measured,
+                command=self.slew.current,
+                soc=self.electricLevel.asInt,
+                min_soc=self.minSoc.asNumber,
+                soc_set=self.socSet.asNumber,
+                state=self.state.name,
+            )
+
+    async def stop(self) -> None:
+        """Stop at once and switch off (the inverter ramps down by itself; a manual stop skips the minimum run time)."""
         self.slew.reset()
-        self.slewActive.update_value(0)
         self.commandPower.update_value(0)
         await self.switch_off()
-        return False
 
     async def switch_off(self) -> None:
         """Switch the device off, but only once: do not repeat a command the device already got."""
@@ -1095,13 +1216,46 @@ class ZendureZenSdk(ZendureDevice):
         if json := await self.httpGet("properties/report"):
             await self.mqttProperties(json)
 
+    def _ensure_reader(self) -> bool:
+        """Start the background reader once; True while it runs."""
+        task = getattr(self, "_reader", None)
+        if task is not None and not task.done():
+            return True
+        hass = getattr(self, "hass", None)
+        if hass is None or not hass.is_running:
+            return False
+        self._reader = hass.async_create_background_task(self._read_loop(), f"{self.name}: zenSDK reports")
+        return True
+
+    async def _read_loop(self) -> None:
+        while True:
+            if self.connection.value != 0:
+                try:
+                    await self.poll()
+                except Exception as err:  # noqa: BLE001 - a failed request is counted by _http; keep reading
+                    _LOGGER.debug("Reading %s failed: %s", self.name, err)
+            await asyncio.sleep(Http.POLL_TICK)
+
+    def cancel_timers(self) -> None:
+        super().cancel_timers()
+        for name in ("_reader", "_confirm_task"):
+            if (task := getattr(self, name, None)) is not None:
+                task.cancel()
+                setattr(self, name, None)
+
     async def dataRefresh(self, update_count: int) -> None:
         if (update_count == 0 and not self.online) or self.connection.value == SmartMode.ZENSDK:
             await self.poll(force=update_count == 0)
 
     async def power_get(self) -> bool:
-        """Get the current power."""
-        if self.connection.value != 0:
+        """Get the current power.
+
+        1.6.5: over HTTP the reports are read by a background reader on their own rhythm. Before, the control cycle
+        read the report itself and the command that followed had to wait Http.MIN_INTERVAL (0.5 s) for the ESP32:
+        on 4 November two thirds of the cycles took 530-580 ms, and in the simulation that half second cost about
+        110 Wh a day in November. Without a running reader (tests, before Home Assistant runs) it reads here as before.
+        """
+        if self.connection.value != 0 and not self._ensure_reader():
             await self.poll()
         result = await super().power_get()
         await self._flash_tick()
@@ -1162,6 +1316,10 @@ class ZendureZenSdk(ZendureDevice):
         if current in (None, ac_mode) or (output == 0 and input_ == 0):
             return
         old_output, old_input = getattr(self, "limits_sent", (self.limitOutput.asInt, self.limitInput.asInt))
+        if not (old_output or old_input) and self.homeInput.asInt == 0 and self.homeOutput.asInt == 0:
+            # 1.6.2: the device is at 0 W (commanded and measured): the new AC mode and the new limit go in one command,
+            # which saves MODE_SWITCH_DELAY and a request. The relay switches at 0 W, then the inverter ramps by itself.
+            return
         if old_output or old_input:
             _LOGGER.debug("Mode switch %s: limit to 0 W first", self.name)
             await self.doCommand({"properties": {"smartMode": 1, "acMode": current, "outputLimit": 0, "inputLimit": 0}})
@@ -1180,15 +1338,71 @@ class ZendureZenSdk(ZendureDevice):
         After a reboot the device then starts at 0 W instead of at the last (high) setpoint.
         """
         persist = persist and self.persist_safe_state and self.pwr_offgrid == 0 and self._flash_safe is not True
+        if self.asleep and (output or input_):
+            events.emit("wake", self.name, output=output, input=input_)
+        self.asleep = persist and not output and not input_  # the stored safe state is smartMode 0: asleep as well
         await self._switch_ac_mode(ac_mode, output, input_)
         properties = {"smartMode": 0 if persist else 1, "acMode": ac_mode, "outputLimit": output, "inputLimit": input_}
         self.ac_mode_sent = ac_mode
         self.limits_sent = (output, input_)
-        if await self.doCommand({"properties": properties}) and persist:
+        stopped = await self.doCommand({"properties": properties})
+        if stopped and not output and not input_ and not persist:
+            self._confirm_stop()
+        if stopped and persist:
             self._flash_safe = True
             self._flash_last = monotonic()
             self._count_flash_write()
             _LOGGER.debug("Safe 0 W state stored in the flash of %s", self.name)
+
+    def _confirm_stop(self) -> None:
+        """After a stop of a running inverter, read its report every second until it shows 0 W (at most 6 s).
+
+        A change of direction waits for a fresh 0 W measurement (or flip_delay without one); with the normal
+        reports every 2-3 s that took 3-4 s. Only over the local zenSDK HTTP connection.
+        """
+        if self.connection.value == 0 or (self.homeInput.asInt == 0 and self.homeOutput.asInt == 0):
+            return
+        task = getattr(self, "_confirm_task", None)
+        if (task is not None and not task.done()) or getattr(self, "hass", None) is None:
+            return
+        self._confirm_task = self.hass.async_create_background_task(self._confirm_loop(), f"{self.name}: confirm 0 W")
+
+    async def _confirm_loop(self) -> None:
+        await asyncio.sleep(Http.CONFIRM_FIRST)
+        end = monotonic() + Http.CONFIRM_FOR
+        while monotonic() < end and not self.limits_sent_nonzero:
+            await self.poll(force=True)
+            if self.homeInput.asInt == 0 and self.homeOutput.asInt == 0:
+                return
+            await asyncio.sleep(Http.CONFIRM_INTERVAL)
+
+    async def sleep(self) -> bool:
+        """Let the idle inverter sleep: only smartMode 0, the limits are 0 W already (RAM).
+
+        A Zendure inverter does not go to its low power state while smartMode is 1 (measured on a SolarFlow
+        3000 Mix AC+: 29-36 W awake and idle, about 5 W asleep). The next power command sets smartMode 1 again
+        and wakes it. Only the flag is written, no limits.
+        """
+        if self.asleep or self.limits_sent_nonzero:
+            return False
+        if await self.doCommand({"properties": {"smartMode": 0}}):
+            self.asleep = True
+            events.emit("sleep", self.name, soc=self.electricLevel.asInt)
+            return True
+        return False
+
+    async def wake(self) -> bool:
+        """Wake the sleeping inverter: smartMode 1 at 0 W in its AC mode, so the next command starts at once."""
+        if not self.asleep:
+            return False
+        events.emit("wake", self.name, reason="ready_hours")
+        await self._power_command(getattr(self, "ac_mode_sent", None) or 2, 0, 0)
+        return True
+
+    @property
+    def limits_sent_nonzero(self) -> bool:
+        sent = getattr(self, "limits_sent", (0, 0))
+        return bool(sent[0] or sent[1])
 
     async def _flash_tick(self) -> None:
         """Store the safe 0 W state once, after a long idle period (needs one flash write instead of one per stop)."""
@@ -1238,6 +1452,10 @@ class ZendureZenSdk(ZendureDevice):
 
     def _http_failed(self, kind: str, err: Exception) -> None:
         self._http_failures += 1
+        if self._http_failures == 1:
+            events.emit("backoff_start", self.name, request=kind, error=type(err).__name__)
+        if kind == "post":
+            events.emit("cmd_failed", self.name, error=str(err)[:80], failures=self._http_failures)
         self._http_retry_after = monotonic() + min(Http.BACKOFF_MAX, Http.BACKOFF_BASE * 2 ** (self._http_failures - 1))
         self._logHttpError(kind, err)
         # offline only when the device is silent over MQTT too (its reports still arrive when only HTTP fails)
@@ -1251,6 +1469,7 @@ class ZendureZenSdk(ZendureDevice):
         self._http_errors.discard(kind)
         if self._http_failures:
             _LOGGER.info("%s answers again after %s failed requests", self.name, self._http_failures)
+            events.emit("backoff_end", self.name, failures=self._http_failures)
         self._http_failures = 0
         self._http_retry_after = 0.0
         self._update_issue(False)
@@ -1310,3 +1529,10 @@ class DeviceSettings:
     kWh: float = 0.0
     socSet: float = 100
     minSoc: float = 0
+
+
+def _dir_name(direction: int) -> str:
+    return "discharge" if direction > 0 else "charge" if direction < 0 else "standby"
+
+
+DIR_NOT_NEEDED = 5.0  # s: a released change of direction without a start in the new direction ends as "not_needed"

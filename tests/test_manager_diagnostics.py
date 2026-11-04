@@ -19,12 +19,14 @@ async def test_manager_diagnostic_entities(hass, enable_custom_integrations) -> 
         patch("custom_components.zendure_ha.manager.Api.Connect", AsyncMock(return_value={"mqtt": {}, "deviceList": []})),
         patch.object(manager.api, "Init", MagicMock()),
         patch.object(manager, "update_p1meter", MagicMock()),
+        # mDNS discovery would open real sockets (zeroconf); it is not what this test is about
+        patch("custom_components.zendure_ha.manager.ZendureDiscovery.async_start", AsyncMock()),
     ):
         await manager.loadDevices()
 
     diagnostics = [
-        manager.cycleDuration, manager.cycleInterval, manager.cycleCount, manager.lastCycle, manager.p1Value, manager.dispatchSetpoint,
-        manager.devicesOnline, manager.devicesCharging, manager.devicesDischarging, manager.devicesIdle, manager.devicesRamping,
+        manager.cycleDuration, manager.cycleInterval, manager.cycleCount, manager.lastCycle, manager.p1Value, manager.p1Rate, manager.dispatchSetpoint,
+        manager.devicesOnline, manager.devicesCharging, manager.devicesDischarging, manager.devicesIdle, manager.devicesSleep,
         manager.mqttCloudConnected, manager.mqttLocalConnected,
     ]  # fmt: skip
     assert all(e.entity_category is EntityCategory.DIAGNOSTIC for e in diagnostics)
@@ -33,3 +35,4 @@ async def test_manager_diagnostic_entities(hass, enable_custom_integrations) -> 
     # entities are not added to hass here, so only check that updating does not raise
     manager.cycleCount.update_value(1)
     manager.mqttCloudConnected.update_value(1)
+    await manager.async_shutdown_manager()  # stop the timers the manager started

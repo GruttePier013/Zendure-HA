@@ -9,6 +9,7 @@ CONF_APPTOKEN = "token"
 CONF_P1METER = "p1meter"
 CONF_P1_HOMEWIZARD = "p1_homewizard"  # address of a HomeWizard P1 meter that is read directly (1 s)
 CONF_P1_RECORD = "p1_record"  # date (YYYY-MM-DD) on which P1 is recorded every second; switches itself off at midnight
+CONF_P1_RECORD_DETAIL = "p1_record_detail"  # the P1 recording includes the control state (default on)
 CONF_P1_TOKEN = "p1_homewizard_token"  # API v2 token of that meter (empty: API v1 or the token of the HomeWizard integration)
 CONF_PRICE = "price"
 CONF_MQTTLOG = "mqttlog"
@@ -23,9 +24,6 @@ CONF_WIFIPSW = "wifipsw"
 CONF_AUTO_MQTT_USER = "auto_mqtt_user"
 
 # power control (options menu)
-CONF_SLEW_ENABLED = "slew_enabled"
-CONF_SLEW_UP = "slew_up"
-CONF_SLEW_DOWN = "slew_down"
 CONF_FLIP_DELAY = "flip_delay"
 CONF_TIMEZERO = "time_zero"
 CONF_TIMEFAST = "time_fast"
@@ -38,9 +36,12 @@ CONF_MANUAL_INTERVAL = "manual_interval"
 CONF_ROLE_MARGIN = "role_margin"
 CONF_FILL_LEVEL = "fill_level"
 CONF_EXPORT_BIAS = "export_bias"
+CONF_SOLAR_FORECAST = "solar_forecast"  # sensor with the solar forecast of today (Solcast); "" = none
+CONF_JUMP = "jump_w"  # W: a P1 jump of at least this much since the last cycle starts a cycle at once; 0 = off
 CONF_FLASH_SAFE = "flash_safe_state"
+CONF_READY_HOURS = "ready_hours"  # e.g. "7-9,12-13,17-19": the discharger is kept awake only then; "" = always
+CONF_SLEEP_AFTER = "sleep_after"  # minutes at 0 W before an idle inverter may sleep (smartMode 0); 0 = off
 CONF_MIN_RUN = "min_run"
-CONF_READY_RATE = "ready_rate"
 CONF_DEVICE_IPS = "device_ips"
 
 CONF_HAKEY = "C*dafwArEOXK"
@@ -83,6 +84,20 @@ class SmartMode:
 
     TIMEFAST = 2.2  # Fast update interval after significant change
     TIMEZERO = 4  # Normal update interval
+    STALE_POWER = 300  # W: watchdog, import or export above this ...
+    JUMP_W = 400  # W: the deviation from the target grew this much since the last cycle: a cycle at once (CONF_JUMP)
+    P1_FRESH = 2.0  # s: a P1 value this old may start the first cycle after a mode change at once
+    JUMP_GAP = 1.0  # s: at least this long between two cycles started by a jump
+    JUMP_SPLIT_W = 0  # W: a jump of at least this much is shared by two inverters (twice the ramp); 0 = off
+    STALE_AFTER = 10.0  # s: ... for this long without any new command is logged and a cycle is forced
+    P1_STALE_WARN = 60.0  # s without a P1 value: repair issue, the batteries keep their power
+    P1_STALE_BASE = 300.0  # s without a P1 value: fall back to the base load / base surplus of the last 10 minutes
+    P1_HISTORY = 600.0  # s of net demand kept for that fall back
+    FOREIGN_TOLERANCE = 25  # W: a reported limit that differs more from what was sent is a write of someone else
+    FOREIGN_GRACE = 5.0  # s after our own command in which a different report is not counted (report lag)
+    FOREIGN_COUNT = 5  # foreign writes ...
+    FOREIGN_WINDOW = 900.0  # ... within this many s raise the repair issue
+    FOREIGN_CLEAR = 3600.0  # s without foreign writes before the issue is removed
     CYCLE_TIMEOUT = 20.0  # s: a control cycle that takes longer is stopped and logged (it would block all following cycles)
     CHARGE_DELAY_FIRST = 2  # s before charging starts after discharging/idle (first time within CHARGE_DELAY_WINDOW)
     CHARGE_DELAY = 60  # s before charging starts again when it already started within CHARGE_DELAY_WINDOW (1.4.4 "hysteria")
@@ -94,7 +109,7 @@ class SmartMode:
     FAST_DEADBAND = 50  # W: smaller P1 differences are left to the normal control cycle
     FAST_INTERVAL = 1.0  # s: at least this long between two fast adjustments of one device (ESP32 load)
     FAST_MIN = 50  # W: the fast adjustment never takes a running device below this (stopping is for the cycle)
-    RAMP_INTERVAL = 1.0  # s between two steps while a device is ramping (one step = at most 1 s of slew rate)
+    RAMP_INTERVAL = 1.0  # s until the next cycle while a command is held back (direction change, minimum run time)
     MANUAL_INTERVAL = 15  # Update interval in manual mode: a fixed power does not need to follow the P1 meter
     OFF_INTERVAL = 60  # Update interval when the manager is off (only the sensors are refreshed)
     MQTT_ISSUE_AFTER = 3  # failed 60 s checks of a MQTT broker before a repair issue is raised
@@ -141,8 +156,12 @@ class Http:
     BACKOFF_MAX = 60  # seconds
     ISSUE_AFTER = 5  # consecutive failures before a repair issue is raised
     POLL_ACTIVE = 2.0  # seconds between two reports while the device is active
-    MODE_SWITCH_DELAY = 1.0  # s between switching the AC mode (at 0 W) and sending the new limit
+    MODE_SWITCH_DELAY = 1.0  # s between switching the AC mode (at 0 W) and sending the new limit (only when not at 0 W)
+    CONFIRM_FIRST = 1.2  # s after a stop before the first extra report is read (an earlier one may be from before it)
+    CONFIRM_INTERVAL = 1.0  # s between the extra reports after a stop
+    CONFIRM_FOR = 6.0  # s: the extra reports end when 0 W is seen, or after this long
     POLL_IDLE = 30.0  # seconds between two reports while the device is completely idle
+    POLL_TICK = 0.25  # s: the background reader (1.6.5) checks this often whether a report is due
 
 
 # Defaults of the settings that can be changed in the options menu
@@ -152,9 +171,16 @@ CONTROL_DEFAULTS = {
     CONF_ROLE_MARGIN: 10,
     CONF_FILL_LEVEL: 85,
     CONF_EXPORT_BIAS: 100,
+    CONF_JUMP: 400,
     CONF_TIMEZERO: 4,
     CONF_TIMEFAST: 2.2,
     CONF_P1_STDDEV_MIN: 15,
     CONF_POWER_START: 50,
     CONF_POWER_TOLERANCE: 5,
+    CONF_SLEEP_AFTER: 10,
 }
+
+
+# settings and entities of 1.5.x that are gone since 1.6.0 (the inverter ramps its power by itself)
+RETIRED_SETTINGS = ("slew_enabled", "slew_up", "slew_down", "ready_rate")
+RETIRED_ENTITIES = ("_slew_factor", "_slew_active", "_devices_ramping")  # end of the unique id

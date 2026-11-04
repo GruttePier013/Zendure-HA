@@ -46,7 +46,7 @@ POWER_DEADBAND = 2  # W, smaller changes of a power sensor are not recorded
 # Settings of a device: shown in the configuration section of the device page. The category is set in the
 # constructor, before the entity is added: Home Assistant adds an entity eagerly (the registry entry is written
 # during add), so a category set after the constructor is lost for entities that are created while running.
-CONFIG_KEYS = frozenset({"gridReverse", "fanSpeed", "Fanspeed", "Fanmode", "fanSwitch", "lampSwitch", "fuseGroup", "connection", "slewFactor"})
+CONFIG_KEYS = frozenset({"gridReverse", "fanSpeed", "Fanspeed", "Fanmode", "fanSwitch", "lampSwitch", "fuseGroup", "connection", "p1_target"})
 
 class EntityAdder:
     """Stand-in for `async_add_entities` that queues entities until the platform is set up.

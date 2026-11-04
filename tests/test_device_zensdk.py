@@ -102,22 +102,14 @@ async def test_idle_device_stores_safe_state_once_after_a_long_idle_period(zensd
     assert len(zensdk_device.mqtt_commands) == 1  # stored once, never again
 
 
-async def test_device_started_from_standby_ramps_instead_of_jumping(zensdk_device) -> None:  # noqa: ANN001
-    """The manager asks a standby device for 1100 W at once; the device itself only takes the first slew step."""
-    zensdk_device.slew.enabled = True
-    zensdk_device.slew.up = 600
+async def test_device_started_from_standby_gets_the_power_at_once(zensdk_device) -> None:  # noqa: ANN001
+    """1.6.0: the inverter ramps by itself, so a standby device gets the full command at once."""
     zensdk_device.setLimits(-2400, 2400)
-    await zensdk_device.power_discharge(1100)
-    assert zensdk_device.slew.current == 600
-    assert zensdk_device.slew.pending  # the manager schedules the next step about 1 s later
-    assert _last_props(zensdk_device)["outputLimit"] == 600
-
-
-async def test_ready_device_starts_faster_from_standby(zensdk_device) -> None:  # noqa: ANN001
-    zensdk_device.setLimits(-2400, 2400)
-    zensdk_device.configure_slew(True, 600, 1200, 5, 10, 1200)
-    await zensdk_device.power_discharge(2200, ready=True)
-    assert _last_props(zensdk_device)["outputLimit"] == 1200
+    zensdk_device.configure_slew(5, 10)
+    await zensdk_device.power_discharge(2200)
+    assert zensdk_device.slew.current == 2200
+    assert not zensdk_device.slew.pending
+    assert _last_props(zensdk_device)["outputLimit"] == 2200
 
 
 async def test_full_battery_clears_the_old_charge_limit(zensdk_device) -> None:  # noqa: ANN001
@@ -172,8 +164,17 @@ def _props(device) -> list[dict]:  # noqa: ANN001
     return [{k: v for k, v in c["properties"].items()} for c in device.mqtt_commands]
 
 
-async def test_first_discharge_from_input_mode_switches_at_zero_first(zensdk_device) -> None:  # noqa: ANN001
+async def test_first_discharge_from_input_mode_at_zero_is_one_command(zensdk_device) -> None:  # noqa: ANN001
+    """1.6.2: at 0 W (commanded and measured) the new mode and the limit go in one command."""
     zensdk_device.acMode._attr_current_option = "input"
+    await zensdk_device.discharge(500)
+    assert _props(zensdk_device) == [{"smartMode": 1, "acMode": 2, "outputLimit": 500, "inputLimit": 0}]
+
+
+async def test_mode_switch_while_still_measuring_power_keeps_the_zero_step(zensdk_device) -> None:  # noqa: ANN001
+    """The stop was sent but the device still reports power: switch the mode at 0 W first, as before."""
+    zensdk_device.acMode._attr_current_option = "input"
+    zensdk_device.homeInput._attr_native_value = 300
     await zensdk_device.discharge(500)
     assert _props(zensdk_device) == [
         {"smartMode": 1, "acMode": 2, "outputLimit": 0, "inputLimit": 0},
@@ -192,15 +193,47 @@ async def test_mode_switch_goes_limit_zero_then_mode_then_new_limit(zensdk_devic
     ]
 
 
-async def test_mode_switch_after_a_stop_skips_the_zero_step(zensdk_device) -> None:  # noqa: ANN001
+async def test_mode_switch_after_a_confirmed_stop_is_one_command(zensdk_device) -> None:  # noqa: ANN001
     await zensdk_device.discharge(500)
-    await zensdk_device.discharge(0)  # the slew limiter already brought it to 0 W
+    await zensdk_device.discharge(0)  # the direction protection already brought it to 0 W (measured 0 W)
     n = len(zensdk_device.mqtt_commands)
     await zensdk_device.charge(-400)
-    assert _props(zensdk_device)[n:] == [
-        {"smartMode": 1, "acMode": 1, "outputLimit": 0, "inputLimit": 0},
-        {"smartMode": 1, "acMode": 1, "outputLimit": 0, "inputLimit": 400},
-    ]
+    assert _props(zensdk_device)[n:] == [{"smartMode": 1, "acMode": 1, "outputLimit": 0, "inputLimit": 400}]
+
+
+async def test_a_stop_reads_the_device_every_second_until_0_w(zensdk_device, monkeypatch) -> None:  # noqa: ANN001
+    from custom_components.zendure_ha.const import Http
+
+    monkeypatch.setattr(Http, "CONFIRM_FIRST", 0.01)
+    monkeypatch.setattr(Http, "CONFIRM_INTERVAL", 0.01)
+    zensdk_device.connection._attr_current_option = "zenSDK"
+    zensdk_device.connection._attr_native_value = 2
+    monkeypatch.setattr(type(zensdk_device.connection), "value", property(lambda _self: 2), raising=False)
+    sent: list[object] = []
+
+    async def post(_path, command):  # noqa: ANN001, ANN202
+        sent.append(command)
+        return True
+
+    reads = []
+
+    async def poll(force: bool = False) -> None:
+        reads.append(force)
+        if len(reads) == 2:
+            zensdk_device.homeOutput._attr_native_value = 0  # the device shows 0 W at the second read
+
+    monkeypatch.setattr(zensdk_device, "httpPost", post)
+    monkeypatch.setattr(zensdk_device, "poll", poll)
+    zensdk_device.homeOutput._attr_native_value = 900  # still discharging
+    await zensdk_device.discharge(0)
+    await zensdk_device._confirm_task
+    assert reads == [True, True]  # read every second, stopped once 0 W was seen
+
+
+async def test_no_extra_reads_over_mqtt(zensdk_device) -> None:  # noqa: ANN001
+    zensdk_device.homeOutput._attr_native_value = 900
+    await zensdk_device.discharge(0)
+    assert getattr(zensdk_device, "_confirm_task", None) is None
 
 
 async def test_same_mode_is_one_command(zensdk_device) -> None:  # noqa: ANN001
@@ -238,3 +271,40 @@ def test_device_settings_are_in_the_configuration_section(zensdk_device) -> None
     assert zensdk_device.connection.entity_category is EntityCategory.CONFIG
     assert zensdk_device.fuseGroup.entity_category is EntityCategory.CONFIG
     assert {"gridReverse", "Fanspeed", "Fanmode", "lampSwitch"} <= CONFIG_KEYS
+
+
+async def test_reports_are_read_in_the_background_not_in_the_cycle(zensdk_device, monkeypatch) -> None:  # noqa: ANN001
+    """1.6.5: the control cycle no longer reads the report itself, so its command does not wait 0.5 s for the ESP32."""
+    import asyncio
+
+    monkeypatch.setattr(type(zensdk_device.connection), "value", property(lambda _self: 2), raising=False)
+    reads: list[bool] = []
+
+    async def poll(force: bool = False) -> None:
+        reads.append(force)
+
+    monkeypatch.setattr(zensdk_device, "poll", poll)
+    await zensdk_device.power_get()
+    assert zensdk_device._reader is not None and not zensdk_device._reader.done()
+    n = len(reads)
+    await zensdk_device.power_get()
+    await asyncio.sleep(0)
+    assert len(reads) <= n + 1  # the cycle did not read again itself; only the reader reads
+    await asyncio.sleep(0.3)
+    assert len(reads) >= 2  # the reader keeps reading on its own rhythm
+    zensdk_device.cancel_timers()
+    await asyncio.sleep(0)
+    assert zensdk_device._reader is None
+
+
+async def test_without_a_running_home_assistant_the_cycle_reads_itself(zensdk_device, monkeypatch) -> None:  # noqa: ANN001
+    monkeypatch.setattr(type(zensdk_device.connection), "value", property(lambda _self: 2), raising=False)
+    monkeypatch.setattr(zensdk_device.hass, "state", __import__("homeassistant.core", fromlist=["CoreState"]).CoreState.not_running)
+    reads: list[bool] = []
+
+    async def poll(force: bool = False) -> None:
+        reads.append(force)
+
+    monkeypatch.setattr(zensdk_device, "poll", poll)
+    await zensdk_device.power_get()
+    assert reads == [False] and getattr(zensdk_device, "_reader", None) is None
