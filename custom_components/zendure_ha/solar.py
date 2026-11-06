@@ -16,6 +16,8 @@ from typing import Any
 
 SUN_LOW_KWH = 0.2  # kWh: less sun than this still expected today counts as "no more sun"
 HOUSE_W = 300  # W: what the house uses on average while the sun still shines (for "will the batteries be full")
+FILL_BAND = 0.1  # 1.6.7: "full today" needs 10 % more sun than room, and only ends when the sun is less than the room
+FILL_HOLD = 600.0  # s: a changed verdict must hold this long before it is used (a forecast update can move it back)
 
 
 def _parse(value: Any) -> datetime | None:
@@ -77,6 +79,14 @@ def hours_to_sunset(sun: Any, now: datetime) -> float:
     return max(0.0, (setting - now).total_seconds() / 3600)
 
 
-def batteries_fill(remaining: float, hours: float, room_wh: float, house_w: float = HOUSE_W) -> bool:
-    """True when the sun still expected today can fill the free room of the batteries (after the house took its part)."""
-    return remaining * 1000 - house_w * hours >= room_wh
+def batteries_fill(remaining: float, hours: float, room_wh: float, house_w: float = HOUSE_W, previous: bool | None = None) -> bool:
+    """True when the sun still expected today can fill the free room of the batteries (after the house took its part).
+
+    1.6.7: with a band. "Full today" needs FILL_BAND more sun than room and stays until the sun is less than the
+    room. On 5 November the verdict changed three times in 12 minutes at the border (09:40-09:52), and a wrong
+    "full today" means a charge delay of 60 s instead of 10 s with the sun exported meanwhile.
+    """
+    surplus = remaining * 1000 - house_w * hours
+    if previous:
+        return surplus >= room_wh
+    return surplus >= room_wh * (1 + FILL_BAND)

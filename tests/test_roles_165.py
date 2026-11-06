@@ -113,12 +113,12 @@ async def test_short_charge_delay_when_the_batteries_will_not_be_full() -> None:
     m, devices = _charging_manager([40, 50])
     m.charge_last = T0 - timedelta(seconds=60)  # charged a minute ago: normally the long delay
     m.solar_fills = False
-    await m.power_charge(-1000, T0)
+    await m.power_charge(-400, T0)
     assert (m.charge_time - T0).total_seconds() == SmartMode.CLOUD_CHARGE_DELAY
     m, devices = _charging_manager([40, 50])
     m.charge_last = T0 - timedelta(seconds=60)
     m.solar_fills = None  # no forecast: as before
-    await m.power_charge(-1000, T0)
+    await m.power_charge(-400, T0)
     assert (m.charge_time - T0).total_seconds() == SmartMode.CHARGE_DELAY
 
 

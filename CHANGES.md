@@ -6,6 +6,17 @@ Zendure HA-GP013 started from [Zendure-HA](https://github.com/Zendure/Zendure-HA
 
 Effects in brackets come from the simulation (`scripts/compare_smart_mode.py`, three SolarFlow 2400 AC+ with measured ramp, latency and losses), not from measurements in a house.
 
+## [1.6.7] - 2026-11-06
+
+### Changed
+- **A big export ends the charge delay early.** From 1000 W export the wait before charging ends after 3 s. An inverter needs 9-12 s to start from 0 W anyway, so a longer wait only exports (5 November replayed: −40 Wh export; November day: +68 Wh).
+- **"Batteries full today" with a band and hold time.** It needs 10 % more sun than free room, ends only when the sun is less than the room, and a changed verdict must hold for 10 minutes. On 5 November it changed three times in 12 minutes.
+- Simulation: `CALIB=1` uses the start times measured on 4 and 5 November (discharge about 9 s, charge about 12 s from 0 W, after sleep as after standby; about 10 s more in the other AC mode).
+
+### Fixed
+- No "foreign write" for a late report of one of our own limits of the last 5 minutes (false alarm after a mode change).
+- No `stop_abrupt` event when the power falls after our own 0 W command.
+
 ## [1.6.6] - 2026-11-04
 
 ### Changed

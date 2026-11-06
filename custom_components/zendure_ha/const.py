@@ -98,11 +98,14 @@ class SmartMode:
     FOREIGN_COUNT = 5  # foreign writes ...
     FOREIGN_WINDOW = 900.0  # ... within this many s raise the repair issue
     FOREIGN_CLEAR = 3600.0  # s without foreign writes before the issue is removed
+    FOREIGN_RECENT = 300.0  # s: a reported limit equal to one of our own commands of this long ago is a late report
     CYCLE_TIMEOUT = 20.0  # s: a control cycle that takes longer is stopped and logged (it would block all following cycles)
     CHARGE_DELAY_FIRST = 2  # s before charging starts after discharging/idle (first time within CHARGE_DELAY_WINDOW)
     CHARGE_DELAY = 60  # s before charging starts again when it already started within CHARGE_DELAY_WINDOW (1.4.4 "hysteria")
     CHARGE_DELAY_WINDOW = 300  # s
     CLOUD_CHARGE_DELAY = 10  # s: CHARGE_DELAY during changing clouds (the sun is back within a minute)
+    CHARGE_DELAY_BIG_W = 1000  # W: an export of at least this much ends the charge delay after CHARGE_DELAY_BIG s (1.6.7)
+    CHARGE_DELAY_BIG = 3  # s: the inverter needs 9-12 s to start from 0 W anyway, a longer wait only exports
     CLOUD_POWER_START = 150  # W: POWER_START during changing clouds (a short shortage does not start a device)
     CLOUD_MARGIN_DISCHARGE = False  # the export margin only while charging: while discharging it would export battery energy
     CLOUD_MARGIN_SHARE = 1.0  # the export margin in cloud mode is at most this share of the recent peak surplus

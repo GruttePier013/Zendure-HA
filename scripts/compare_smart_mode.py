@@ -143,6 +143,18 @@ CAPACITY_WH = float(os.environ.get("CAPACITY", "5280" if SCENARIO == "day" else 
 IDLE_AWAKE_W = float(os.environ.get("IDLE_AWAKE_W", "30"))
 IDLE_ASLEEP_W = float(os.environ.get("IDLE_ASLEEP_W", "5"))
 SLEEP_AFTER = float(os.environ.get("SLEEP_AFTER", "0"))  # minutes, 0 = off
+# CALIB=1 (1.6.7): the inverter model measured on 4 and 5 November 2026 (130 starts of the SolarFlow 2400 AC+).
+# A start from 0 W takes about 8.5 s (discharge) or 11.5 s (charge) until 50 W is reported, after sleep as after
+# standby: the inverter closes its grid relay and synchronises first. A start in the other AC mode takes about
+# 10 s longer. Changes of a running inverter take LATENCY (about 1 s with the background reader of 1.6.5).
+CALIB = os.environ.get("CALIB", "0") != "0"
+if CALIB:
+    for _k, _v in (("LATENCY", "1.06"), ("RAMP_W", "250"), ("REPORT_S", "2"), ("START_DIS", "6.0"), ("START_CHG", "9.0"),
+                   ("MODE_SWITCH", "10"), ("WAKE_S", "0")):  # fmt: skip
+        os.environ.setdefault(_k, _v)
+    LATENCY, RAMP_W, REPORT_S = float(os.environ["LATENCY"]), float(os.environ["RAMP_W"]), float(os.environ["REPORT_S"])
+START_DIS = float(os.environ.get("START_DIS", "0"))  # extra s for a discharge start from 0 W
+START_CHG = float(os.environ.get("START_CHG", "0"))  # extra s for a charge start from 0 W
 WAKE_S = float(os.environ.get("WAKE_S", "2"))
 READY_HOURS = [] if os.environ.get("READY_HOURS", "") in ("", "none") else [tuple(int(h) for h in w.split("-")) for w in os.environ["READY_HOURS"].split(",")]
 READY_NEVER = os.environ.get("READY_HOURS", "") == "none"
@@ -154,6 +166,8 @@ ASSUME_ZERO = float(os.environ.get("ASSUME_ZERO", "0"))
 # JUMP_SPLIT=<W> shares a jump of at least that much over two inverters
 if "JUMP_W" in os.environ:
     SmartMode.JUMP_W = int(os.environ["JUMP_W"])
+if "BIGW" in os.environ:  # 1.6.7: export from which the charge delay ends early (99999 = as 1.6.6)
+    SmartMode.CHARGE_DELAY_BIG_W = int(os.environ["BIGW"])
 if "JUMP_SPLIT" in os.environ:
     SmartMode.JUMP_SPLIT_W = int(os.environ["JUMP_SPLIT"])
 SIM = {"t": 0.0}
@@ -466,13 +480,15 @@ class Device:
         self.ac_mode: int | None = None  # 1 input, 2 output (None: not known yet)
         self.confirm_until = -1.0
         self.mode_switches = 0
+        self.ready_at = 0.0
+        self.start_sent: float | None = None
 
     # -- physics --------------------------------------------------------------------------
     def step(self) -> None:
         while self.queue and self.queue[0][0] <= SIM["t"]:
             self.target = self.queue.popleft()[1]
         soc = self.soc_wh / CAPACITY_WH * 100
-        target = self.target
+        target = self.target if SIM["t"] >= self.ready_at else 0.0
         if target > 0 and soc <= 10:
             target = 0
         if target < 0 and soc >= 100:
@@ -514,6 +530,9 @@ class Device:
         self._read_t = SIM["t"]
         self.mqtt_last = SIM["t"]  # time of the last report (like ZendureDevice.mqttProperties)
         a = int(round(self.actual))
+        if self.start_sent is not None and abs(a) >= 50:
+            STATS.setdefault("start_s" if a > 0 else "start_chg_s", []).append(SIM["t"] - self.start_sent)
+            self.start_sent = None
         self.homeOutput.v, self.homeInput.v = max(0, a), max(0, -a)
         self.batteryOutput.v, self.batteryInput.v = self.homeOutput.v, self.homeInput.v
         soc = self.soc_wh / CAPACITY_WH * 100
@@ -579,7 +598,14 @@ class Device:
         # 1.4.4 writes a 0 W command with smartMode 0 (flash); 1.5.0 always smartMode 1 (RAM)
         if not NEW and power == 0:
             self.flash += 1
-        self.queue.append((SIM["t"] + LATENCY + wake, power))
+        if power and abs(self.actual) < 10 and self.target == 0 and SIM["t"] >= self.ready_at:
+            # a start from 0 W: no power before the relay closed (later commands only change the level)
+            self.ready_at = SIM["t"] + LATENCY + wake + (START_DIS if power > 0 else START_CHG)
+            self.start_sent = SIM["t"]
+        elif not power:
+            self.ready_at = 0.0
+            self.start_sent = None
+        self.queue.append((SIM["t"] + LATENCY + (wake if not self.ready_at else 0), power))
         return power
 
     async def prepare(self, direction: int) -> bool:
@@ -819,6 +845,11 @@ async def main() -> None:
             surplus = forecast_remaining(SIM["t"], float(os.environ.get("FC_FILL_Q", "0.6"))) - 300 * daylight
             room = sum(CAPACITY_WH - d.soc_wh for d in devices)
             fills = surplus >= room
+            if hasattr(m, "_fill_verdict") and os.environ.get("FILL_HYST", "1") != "0":
+                # 1.6.7: the band and the hold time of the integration
+                from custom_components.zendure_ha import solar as _solar
+
+                fills = m._fill_verdict(_solar.batteries_fill(surplus / 1000, 0, room, previous=m.solar_fills), SIM["t"])
             if hasattr(m, "solar_fills"):
                 m.solar_fills = fills  # 1.6.2: the integration switches the margins off itself
             else:
@@ -1026,6 +1057,8 @@ async def main() -> None:
         "reserve_low_min": round(stats.get("reserve_low_s", 0) / 60),
         "reversals_under_load": STATS["reversals_under_load"],
         "reversal_avg_w": round(STATS["reversal_w"] / STATS["reversals_under_load"]) if STATS["reversals_under_load"] else 0,
+        "start_latency_median_s": round(sorted(STATS.get("start_s", [0]))[len(STATS.get("start_s", [0])) // 2], 1),
+        "start_latency_charge_median_s": round(sorted(STATS.get("start_chg_s", [0]))[len(STATS.get("start_chg_s", [0])) // 2], 1),
         "export_by_10min": [round(x) for x in stats["export_by_10min"]],
     }
     with open(OUT, "w") as f:  # noqa: ASYNC230 - standalone script, nothing else runs on this loop

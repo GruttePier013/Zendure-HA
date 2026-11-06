@@ -295,10 +295,26 @@ async def test_cloud_mode_charges_again_sooner() -> None:
     m.charge_weight = sum(d.pwr_max * (100 - d.electricLevel.asInt) for d in devices)
     m.charge_last = T0 - timedelta(seconds=60)  # charged a minute ago
     m.charge_time = datetime.max
-    await m.power_charge(-1000, T0)
+    await m.power_charge(-400, T0)
     assert m.charge_time == T0 + timedelta(seconds=SmartMode.CHARGE_DELAY)
     _make_cloudy(m)
     m.charge_time = datetime.max
     m.charge_last = T0 - timedelta(seconds=60)
-    await m.power_charge(-1000, T0)
+    await m.power_charge(-400, T0)
     assert m.charge_time == T0 + timedelta(seconds=SmartMode.CLOUD_CHARGE_DELAY)
+
+
+async def test_big_export_ends_the_charge_delay_early() -> None:
+    """1.6.7: at 1000 W export or more the charge delay ends after CHARGE_DELAY_BIG s."""
+    from custom_components.zendure_ha.const import SmartMode
+
+    m, devices = _manager([40, 50])
+    m.charge = list(devices)
+    m.charge_limit, m.charge_optimal = -4800, -1200
+    m.charge_weight = sum(d.pwr_max * (100 - d.electricLevel.asInt) for d in devices)
+    m.charge_last = T0 - timedelta(seconds=60)
+    m.charge_time = datetime.max
+    await m.power_charge(-400, T0)
+    assert m.charge_time == T0 + timedelta(seconds=SmartMode.CHARGE_DELAY)
+    await m.power_charge(-2000, T0 + timedelta(seconds=1))  # the export grows: the wait ends 3 s after it began
+    assert m.charge_time == T0 + timedelta(seconds=SmartMode.CHARGE_DELAY_BIG)

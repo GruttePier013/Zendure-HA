@@ -110,3 +110,30 @@ def test_update_solar_reads_the_sensor_and_logs_changes(monkeypatch) -> None:  #
     m.solar_sensor = ""
     m._update_solar()
     assert (m.solar_fills, m.sun_low) == (None, False)
+
+
+
+def test_fill_band() -> None:
+    """1.6.7: "full today" needs 10 % more sun than room and only ends below the room."""
+    from custom_components.zendure_ha import solar
+
+    assert not solar.batteries_fill(10.5, 0, 10000)  # 5 % more: not yet
+    assert solar.batteries_fill(11.0, 0, 10000)
+    assert solar.batteries_fill(10.1, 0, 10000, previous=True)  # stays
+    assert not solar.batteries_fill(9.9, 0, 10000, previous=True)
+
+
+def test_fill_verdict_holds() -> None:
+    from types import SimpleNamespace
+
+    from custom_components.zendure_ha import solar
+    from custom_components.zendure_ha.manager import ZendureManager
+
+    m = SimpleNamespace(solar_fills=None)
+    verdict = ZendureManager._fill_verdict.__get__(m)
+    assert verdict(True, 0.0) is True  # the first verdict at once
+    m.solar_fills = True
+    assert verdict(False, 10.0) is True  # changed: held
+    assert verdict(True, 20.0) is True  # back: the hold starts again
+    assert verdict(False, 30.0) is True
+    assert verdict(False, 30.0 + solar.FILL_HOLD) is False

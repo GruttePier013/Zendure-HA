@@ -353,3 +353,16 @@ def test_sleep_after_10_minutes_by_default() -> None:
     m.apply_settings({"ready_hours": "nonsense"})
     assert m.ready_hours == []  # an invalid value (not possible via the options) counts as no hours
     m.apply_settings({})
+
+
+def test_late_report_of_our_own_earlier_limit_is_no_foreign_write() -> None:
+    """1.6.7: 5 November 11:03, 1095 W reported 77 s after we sent 1094 W and then 0 W."""
+    d = _sdk((0, 0))
+    d._limit_confirmed = {"inputLimit": 0}
+    d.sent_recent = [(monotonic() - 77, (0, 1094)), (monotonic() - 60, (0, 0))]
+    ZendureDevice._check_foreign(d, "inputLimit", 1095)
+    assert d.foreign_writes == []
+    d.sent_recent = [(monotonic() - 400, (0, 1094))]  # too long ago: counted
+    d._limit_confirmed = {"inputLimit": 0}
+    ZendureDevice._check_foreign(d, "inputLimit", 1095)
+    assert len(d.foreign_writes) == 1

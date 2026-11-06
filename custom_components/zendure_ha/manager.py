@@ -994,12 +994,26 @@ class ZendureManager(DataUpdateCoordinator[None], EntityDevice):
             fills, low = None, False
         else:
             room = sum(max(0.0, (d.socSet.asNumber - d.electricLevel.asNumber) / 100 * d.kWh * 1000) for d in self.devices if d.online)
-            fills = solar.batteries_fill(remaining, solar.hours_to_sunset(self.hass.states.get("sun.sun"), now), room)
+            fills = self._fill_verdict(solar.batteries_fill(remaining, solar.hours_to_sunset(self.hass.states.get("sun.sun"), now), room, previous=self.solar_fills), monotonic())
             low = remaining < solar.SUN_LOW_KWH
         if (fills, low) != (self.solar_fills, self.sun_low):
             events.emit("solar", "", remaining_kwh=remaining, fills=fills, sun_low=low)
             _LOGGER.info("Solar forecast: %s kWh still expected today, batteries full today: %s, no more sun: %s", remaining, fills, low)
         self.solar_remaining, self.solar_fills, self.sun_low = remaining, fills, low
+
+    def _fill_verdict(self, fills: bool, now: float) -> bool:
+        """The verdict "batteries full today" changes only when the new one held for solar.FILL_HOLD s (1.6.7)."""
+        if self.solar_fills is None or fills == self.solar_fills:
+            self._fill_since = None
+            return fills
+        since = getattr(self, "_fill_since", None)
+        if since is None:
+            self._fill_since = now
+            return self.solar_fills
+        if now - since < solar.FILL_HOLD:
+            return self.solar_fills
+        self._fill_since = None
+        return fills
 
     def _update_p1_rate(self) -> None:
         sensor = getattr(self, "p1Rate", None)
@@ -1845,8 +1859,16 @@ class ZendureManager(DataUpdateCoordinator[None], EntityDevice):
                 delay = SmartMode.CLOUD_CHARGE_DELAY if self.cloud_mode or self.solar_fills is False else SmartMode.CHARGE_DELAY
                 self.charge_time = time + timedelta(seconds=SmartMode.CHARGE_DELAY_FIRST if (time - self.charge_last).total_seconds() > SmartMode.CHARGE_DELAY_WINDOW else delay)
                 self.charge_last = self.charge_time
+                self.charge_wait = time
                 self.pwr_low = 0
-            setpoint = 0
+            if setpoint <= -SmartMode.CHARGE_DELAY_BIG_W:
+                # 1.6.7: a big export ends the wait early. The inverter needs 9-12 s to start from 0 W anyway (measured
+                # on 4 and 5 November); waiting longer only exports (12:30 on 5 November: 10 s wait, 2 kW, then 12 s start)
+                short = getattr(self, "charge_wait", time) + timedelta(seconds=SmartMode.CHARGE_DELAY_BIG)
+                if short < self.charge_time:
+                    self.charge_time = self.charge_last = short
+            if self.charge_time > time:
+                setpoint = 0
         self.operationstate.update_value(ManagerState.CHARGE.value if setpoint < 0 else ManagerState.IDLE.value)
 
         # distribute charging devices

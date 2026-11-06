@@ -934,6 +934,10 @@ class ZendureDevice(EntityDevice):
             return
         if now - getattr(self, "command_time", -1e9) < SmartMode.FOREIGN_GRACE:
             return
+        if any(now - t < SmartMode.FOREIGN_RECENT and abs(reported - limits[index]) <= SmartMode.FOREIGN_TOLERANCE for t, limits in getattr(self, "sent_recent", ())):
+            # 1.6.7: a late report of one of our own earlier limits (5 November 11:03, after a change of mode: 1095 W
+            # reported, 77 s after we sent 1094 W), not another controller
+            return
         if confirmed.get(key) != sent[index]:
             return  # our value was never reported back (the device rounds or clamps it): not a foreign write
         confirmed.pop(key)  # one count per change; counted again when our next value was taken and changed again
@@ -1035,7 +1039,7 @@ class ZendureDevice(EntityDevice):
 
         prev = getattr(self, "_event_measure", None)
         self._event_measure = (now, measured, self.slew.current)
-        if prev is not None and now - prev[0] <= 5.0 and abs(prev[1]) - abs(measured) > events.ABRUPT_W and prev[2] == self.slew.current and abs(measured) < abs(prev[1]):
+        if prev is not None and now - prev[0] <= 5.0 and abs(prev[1]) - abs(measured) > events.ABRUPT_W and prev[2] == self.slew.current and abs(measured) < abs(prev[1]) and abs(self.slew.current) >= ZERO_BAND:
             events.emit(
                 "stop_abrupt",
                 self.name,
@@ -1345,6 +1349,7 @@ class ZendureZenSdk(ZendureDevice):
         properties = {"smartMode": 0 if persist else 1, "acMode": ac_mode, "outputLimit": output, "inputLimit": input_}
         self.ac_mode_sent = ac_mode
         self.limits_sent = (output, input_)
+        self._remember_sent()
         stopped = await self.doCommand({"properties": properties})
         if stopped and not output and not input_ and not persist:
             self._confirm_stop()
@@ -1398,6 +1403,14 @@ class ZendureZenSdk(ZendureDevice):
         events.emit("wake", self.name, reason="ready_hours")
         await self._power_command(getattr(self, "ac_mode_sent", None) or 2, 0, 0)
         return True
+
+    def _remember_sent(self) -> None:
+        """Keep the limits sent in the last SmartMode.FOREIGN_RECENT s (late reports of them are no foreign writes)."""
+        now = monotonic()
+        recent = [(t, limits) for t, limits in getattr(self, "sent_recent", []) if now - t < SmartMode.FOREIGN_RECENT]
+        if not recent or recent[-1][1] != self.limits_sent:
+            recent.append((now, self.limits_sent))
+        self.sent_recent = recent[-20:]
 
     @property
     def limits_sent_nonzero(self) -> bool:

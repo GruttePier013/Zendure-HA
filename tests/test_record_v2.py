@@ -313,3 +313,13 @@ async def test_watchdog_stops_counting_when_a_command_is_sent(hass, monkeypatch)
         m.devices[0].command_time = float("inf") if s == 5 else m.devices[0].command_time  # a command in between
         await m._watch_stale(1500)
     assert m.stale_total == 0
+
+
+async def test_no_abrupt_stop_after_our_own_stop(clocked) -> None:  # noqa: ANN001
+    """1.6.7: the power falls to 0 W after we commanded 0 W: no stop_abrupt (3 false events on 5 November)."""
+    device, clock = clocked
+    await device.power_discharge(0)
+    device._check_events(900)
+    clock.t += 1
+    device._check_events(0)
+    assert events.counters["stop_abrupt"] == 0
