@@ -121,9 +121,11 @@ class ZendureRestoreSensor(ZendureSensor, RestoreEntity):
         deviceclass: Any | None = None,
         stateclass: Any | None = None,
         precision: int | None = None,
+        icon: str | None = None,
+        category: EntityCategory | None = None,
     ) -> None:
         """Initialize a select entity."""
-        super().__init__(device, uniqueid, template, uom, deviceclass, stateclass, precision)
+        super().__init__(device, uniqueid, template, uom, deviceclass, stateclass, precision, icon=icon, category=category)
         self.last_value = 0
         self.lastValueUpdate = dt_util.utcnow()
 

@@ -345,6 +345,10 @@ class ZendureManager(DataUpdateCoordinator[None], EntityDevice):
                 match device.fuseGroup.state:
                     case "owncircuit" | "group3600":
                         fg = FuseGroup(device.name, 3600, -3600)
+                    case "group600_1200":
+                        fg = FuseGroup(device.name, 600, -1200)
+                    case "group600_2400":
+                        fg = FuseGroup(device.name, 600, -2400)
                     case "group800":
                         fg = FuseGroup(device.name, 800, -1200)
                     case "group800_2400":
@@ -382,14 +386,16 @@ class ZendureManager(DataUpdateCoordinator[None], EntityDevice):
                 fusegroups: dict[Any, str] = {
                     0: "unused",
                     1: "owncircuit",
-                    2: "group800",
-                    3: "group800_2400",
-                    4: "group1200",
-                    5: "group2000",
-                    6: "group2400",
-                    7: "group3600",
-                    8: "group4000",
-                    9: "group5000",
+                    2: "group600_1200",
+                    3: "group600_2400",
+                    4: "group800",
+                    5: "group800_2400",
+                    6: "group1200",
+                    7: "group2000",
+                    8: "group2400",
+                    9: "group3600",
+                    10: "group4000",
+                    11: "group5000",
                 }
                 for deviceId, fg in fuseGroups.items():
                     if deviceId != device.deviceId:
@@ -429,8 +435,8 @@ class ZendureManager(DataUpdateCoordinator[None], EntityDevice):
         if getattr(self, "zero_fast", None) is not None and self.zero_fast != datetime.max:
             # the next P1 value starts a cycle at once (seen: 11 s without a cycle after off -> smart)
             self.zero_next = self.zero_fast = datetime.min
-        if operation in SMART_MODES and previous not in SMART_MODES and self._charging_now():
-            # manual mode charges without the charge delay, so the delay still reads "never started": the first smart
+        if operation in SMART_MODES and (previous not in SMART_MODES or previous == ManagerMode.STORE_SOLAR) and self._charging_now():
+            # manual mode (and store solar, 1.6.8) charges without the charge delay, so the delay still reads "never started": the first smart
             # cycle would stop the charging, wait for the delay (2 s, or 60 s after earlier charging) and start again
             # (3 November: manual -6000 W -> smart gave 0 W, a little charging, 0 W, charging). It already charges.
             self.charge_time = self.charge_last = datetime.now()
@@ -1368,13 +1374,17 @@ class ZendureManager(DataUpdateCoordinator[None], EntityDevice):
                 # Discharge to cover demand and always pass through available solar; never charge
                 await self.power_discharge(max(self.produced, peak_setpoint(setpoint, self.peak_limit, self.produced)), time)
 
-            case ManagerMode.MATCHING_CHARGE | ManagerMode.STORE_SOLAR:
-                # Allow discharge of produced power in MATCHING_CHARGE-Mode, otherwise only charge
+            case ManagerMode.MATCHING_CHARGE:
+                # Allow discharge of produced power, otherwise only charge
                 # d.pwr_produced is negative, but self.produced is positive
-                if setpoint > 0 and self.produced > SmartMode.POWER_START and self.operation == ManagerMode.MATCHING_CHARGE:
+                if setpoint > 0 and self.produced > SmartMode.POWER_START:
                     await self.power_discharge(min(self.produced, setpoint), time)
                 else:
                     await self.power_charge(min(0, setpoint), time)
+
+            case ManagerMode.STORE_SOLAR:
+                # Only charge; it never discharges, so there is no flip to hold off (upstream #1665)
+                await self.power_charge(min(0, setpoint), time, hysteresis=False)
 
             case ManagerMode.MANUAL:
                 # Manual power into or from home

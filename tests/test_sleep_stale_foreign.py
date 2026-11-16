@@ -247,7 +247,7 @@ def test_idle_and_asleep_are_counted_apart() -> None:
 
 
 async def test_retired_ramp_settings_are_removed_by_the_migration(hass) -> None:  # noqa: ANN001
-    from pytest_homeassistant_custom_component.common import MockConfigEntry
+    from pytest_homeassistant.common import MockConfigEntry
 
     from custom_components.zendure_ha import async_migrate_entry
     from custom_components.zendure_ha.const import DOMAIN
@@ -262,7 +262,7 @@ async def test_retired_ramp_settings_are_removed_by_the_migration(hass) -> None:
 
 async def test_retired_entities_are_removed(hass) -> None:  # noqa: ANN001
     from homeassistant.helpers import entity_registry as er
-    from pytest_homeassistant_custom_component.common import MockConfigEntry
+    from pytest_homeassistant.common import MockConfigEntry
 
     from custom_components.zendure_ha import remove_retired_entities
     from custom_components.zendure_ha.const import DOMAIN
