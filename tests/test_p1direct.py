@@ -218,7 +218,7 @@ async def test_unmatched_mdns_service_identified_by_report(hass, monkeypatch) ->
 
 
 async def test_manual_address_follows_when_it_no_longer_answers(hass, zensdk_device) -> None:  # noqa: ANN001
-    from pytest_homeassistant_custom_component.common import MockConfigEntry
+    from pytest_homeassistant.common import MockConfigEntry
 
     sn = zensdk_device.snNumber
     entry = MockConfigEntry(domain="zendure_ha", data={CONF_DEVICE_IPS: {sn: "192.168.1.201"}})

@@ -5,7 +5,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from homeassistant.const import EntityCategory
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant.common import MockConfigEntry
 
 from custom_components.zendure_ha.const import DOMAIN
 from custom_components.zendure_ha.manager import ZendureManager

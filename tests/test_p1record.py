@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, patch
 
 from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.util import dt as dt_util
-from pytest_homeassistant_custom_component.common import MockConfigEntry, async_fire_time_changed
+from pytest_homeassistant.common import MockConfigEntry, async_fire_time_changed
 
 from custom_components.zendure_ha.const import CONF_APPTOKEN, CONF_MQTTLOCAL, CONF_MQTTLOG, CONF_P1_RECORD, CONF_P1METER, CONF_SIM, DOMAIN
 from custom_components.zendure_ha.manager import ZendureManager

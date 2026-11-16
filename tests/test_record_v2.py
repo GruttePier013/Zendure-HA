@@ -11,7 +11,7 @@ from typing import Any
 
 import pytest
 from homeassistant.util import dt as dt_util
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant.common import MockConfigEntry
 
 from custom_components.zendure_ha import events
 from custom_components.zendure_ha.const import DOMAIN, DeviceState, ManagerMode, SmartMode

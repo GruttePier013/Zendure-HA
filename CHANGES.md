@@ -6,6 +6,26 @@ Zendure HA-GP013 started from [Zendure-HA](https://github.com/Zendure/Zendure-HA
 
 Effects in brackets come from the simulation (`scripts/compare_smart_mode.py`, three SolarFlow 2400 AC+ with measured ramp, latency and losses), not from measurements in a house.
 
+## [1.6.8] - 2026-11-16
+
+Taken over from Zendure-HA up to 1.4.6.
+
+### Added
+- **Fuse groups 600 W / 1200 W and 600 W / 2400 W** (Zendure-HA #1739). The options are renumbered; a saved choice is restored by its name, so it stays the same group.
+- SF800 Pro2 in the list of supported devices (#1759).
+- Names in all languages and icons for the raw device properties (AC/DC/PV status, OTA, IoT, smart mode, …) (#1760).
+
+### Changed
+- **Raw device properties go to the Diagnostic section** of the device (#1760). Error, grid state, max. charge limit and pack state stay in the main list. The entities keep their entity_id and stay enabled; only dashboards that are generated automatically no longer show them.
+- **Store solar charges without the charge delay** (#1665). It never discharges, so there is no change of direction to wait for. A switch from store solar to another smart mode while charging starts no delay either (as from manual since 1.6.0).
+- Test stack: `pytest-homeassistant[bluetooth]` 2026.11.0 instead of `pytest-homeassistant-custom-component` (#1750); ruff 0.17.3.
+
+### Fixed
+- An AB1000S on an SF800 was shown as an 8 kWh I8000 when the device reports packType 70 (#1765). packType 70 is only the I8000 on an SF4000.
+- A restored number (manual power) could be overwritten with 0 right after the restore after a restart (#1764): the interface showed the old value, the manager used 0.
+- A failing entity migration (target id already held by an old registry entry) no longer stops the setup of the other entities of that device (#1760).
+- SoC limit state labels: 1 = full, 2 = limiting (#1738; also corrected in Dutch and French).
+
 ## [1.6.7] - 2026-11-06
 
 ### Changed
