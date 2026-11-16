@@ -4,22 +4,33 @@
 
 Zendure HA-GP013 uses the same domain (`zendure_ha`) as Zendure-HA. It takes over the existing config entry, so your devices, entity IDs, history, energy dashboard and settings stay. The two cannot be installed side by side.
 
-The settings live in Home Assistant's `.storage`, not in the integration folder. Replacing the files is therefore safe, as long as you **never delete the integration under *Settings → Devices & services***: that would remove the config entry and the settings with it.
+> **Do not use *Remove* in HACS (or *Delete* under *Devices & services*).** Recent HACS / Home Assistant versions also remove the config entry, and with it your settings and entities.
+
+Instead, tell HACS to stop tracking Zendure-HA and download this integration over the existing files.
 
 ## With HACS
 
-1. **Make a backup** (*Settings → System → Backups*).
-2. **HACS → Zendure-HA (shown as *Zendure Home Assistant Integration*) → ⋮ → Remove.** This removes the files and HACS stops tracking Zendure-HA. Do *not* restart yet, and do not touch the integration under *Devices & services*.
-3. **HACS → ⋮ → Custom repositories** → add `https://github.com/GruttePier013/Zendure-HA-GP013`, type *Integration*.
-4. **Download Zendure HA-GP013** (latest release).
-5. **Restart Home Assistant.** The integration loads with the existing config entry. New settings get their defaults; review them under *Configure*.
+1. **Make a full backup** (*Settings → System → Backups*).
+2. **Add this repository to HACS** (do not download yet): HACS → ⋮ → *Custom repositories* → `https://github.com/GruttePier013/Zendure-HA-GP013`, type *Integration*.
+3. **Stop Home Assistant** and mark Zendure-HA as not installed in HACS' own storage. With the *Terminal & SSH* add-on:
 
-If you restarted between step 2 and 4 by accident: the integration shows as *not loaded* until the new files are there. Nothing is lost; download and restart.
+   ```sh
+   ha core stop
+   cd /config/.storage
+   cp hacs.repositories hacs.repositories.bak
+   jq '(.data[] | select(.full_name == "Zendure/Zendure-HA")) |= (.installed = false | del(.version_installed, .installed_commit))' \
+     hacs.repositories > /tmp/hacs.repositories && mv /tmp/hacs.repositories hacs.repositories
+   ha core start
+   ```
 
-## Copied by hand, HACS still shows Zendure-HA
+   Home Assistant must be stopped while you edit, otherwise HACS writes its old state back on shutdown. Without `jq`: open `hacs.repositories`, find the entry with `"full_name": "Zendure/Zendure-HA"` and set `"installed": false`.
+4. **HACS → Zendure HA-GP013 → Download** (latest release). HACS writes the files over the existing `custom_components/zendure_ha`; nothing is removed.
+5. **Restart Home Assistant.** The integration loads with the existing config entry. Review new settings under *Configure*.
 
-If you copied this integration into `custom_components/zendure_ha` yourself, HACS still lists Zendure-HA with its old version and may offer it as an update. Installing that "update" would overwrite this integration. Follow the steps above: *Remove* in HACS deletes the folder you copied, and the download in step 4 puts it back, now tracked by HACS under this repository.
+Zendure-HA now shows in HACS as not installed. Never download it again: it would overwrite this integration.
 
-## Back to Zendure-HA
+## If the config entry was already removed
 
-The same steps the other way round. Settings that only exist here are ignored by Zendure-HA.
+1. **Restore a backup from before the removal** if you have one: *Settings → System → Backups* → restore only the Home Assistant part. Then follow the steps above.
+2. **No backup:** download Zendure HA-GP013 in HACS, restart and add the integration again with the same Zendure token. Home Assistant remembers removed entities for a while and gives them back their old entity IDs, so history, statistics and the energy dashboard continue. Check that no entity got a `_2` suffix.
+3. Enter the settings again under *Configure*. If the P1 recording was on, `<config>/zendure_ha/p1_<date>.meta.json` lists all settings you had. Also set the fuse group per device and the Zendure Manager entities (mode, P1 target, manual power) again.
