@@ -644,6 +644,13 @@
           "on": "On",
           "off": "Off"
         }
+      },
+      "direction_change": {
+        "name": "Direction change",
+        "state": {
+          "via_zero": "Via 0 W (stop, pause, start)",
+          "direct": "Direct (AC mode only)"
+        }
       }
     },
     "switch": {

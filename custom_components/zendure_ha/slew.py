@@ -10,6 +10,9 @@ stays protects the relays:
   s; when the device still reports power, the limiter waits for 0 W, at most ``FLIP_MAX`` s.
 * A device that was just started keeps running at a low power (``HOLD_POWER``) until it has run
   for ``min_run`` seconds, so a short disturbance does not make the relay chatter.
+* 1.7.0: with ``direct`` (the select *Direction change* of the inverter) a change of direction is not held at all:
+  the inverter gets the new direction at once and ramps through 0 W by itself (measured on 18 November 2026:
+  about 230 W/s through 0 W, no start delay of 9-11 s). The minimum run time still applies to a stop.
 * ``pending`` is True while the command is held back by one of these rules; the manager then runs the
   next cycle about one second later.
 
@@ -22,6 +25,8 @@ import time as _time
 from collections.abc import Callable
 
 DEFAULT_FLIP_DELAY = 6  # seconds at 0 W before the direction may change when no measurement confirms 0 W
+# 1.7.0: 0.25 s was simulated and is not used. With three inverters it changed nothing (the roles let different inverters
+# charge and discharge), with one inverter at most 0.3-0.6 Wh per change; the 2 s at 0 W stay as a margin for the relay.
 FLIP_MIN = 2.0  # seconds at 0 W before the direction may change, also when 0 W is confirmed
 FLIP_MAX = 15.0  # seconds: the longest wait for a device that still reports power after the stop
 MEASURE_LAG = 1.0  # seconds: a measurement this soon after the stop may still be from before it
@@ -39,6 +44,7 @@ class SlewLimiter:
         self.min_run: float = DEFAULT_MIN_RUN
         self.current: int = 0  # last commanded (limited) power
         self.pending = False  # True while the last command is held back (direction change, minimum run time)
+        self.direct = False  # 1.7.0: a change of direction goes straight through (the inverter ramps through 0 W)
         self._updated: float | None = None
         self._zero_since: float | None = None
         self._zero_confirmed = False  # a fresh measurement after the stop showed 0 W
@@ -121,8 +127,8 @@ class SlewLimiter:
         ref = self.current
         goal = target
 
-        # A change of direction goes through 0 W first
-        if ref * target < 0 and abs(ref) >= ZERO_BAND:
+        # A change of direction goes through 0 W first (not with ``direct``: the inverter does that by itself)
+        if ref * target < 0 and abs(ref) >= ZERO_BAND and not self.direct:
             goal = 0
 
         # A device that just started keeps running at a low power for a minimum time
@@ -130,7 +136,7 @@ class SlewLimiter:
             goal = self._last_dir * HOLD_POWER
 
         # Hold the opposite direction until the device is confirmed at 0 W (or the waiting time is over)
-        if goal != 0 and abs(ref) < ZERO_BAND and self._last_dir != 0 and (1 if goal > 0 else -1) != self._last_dir and not self.flip_released(now):
+        if goal != 0 and abs(ref) < ZERO_BAND and self._last_dir != 0 and (1 if goal > 0 else -1) != self._last_dir and not self.direct and not self.flip_released(now):
             goal = 0
 
         return self._store(goal, target, now)

@@ -644,6 +644,13 @@
           "on": "Ein",
           "off": "Aus"
         }
+      },
+      "direction_change": {
+        "name": "Richtungswechsel",
+        "state": {
+          "via_zero": "Über 0 W (Stopp, Pause, Start)",
+          "direct": "Direkt (nur AC-Modus)"
+        }
       }
     },
     "switch": {

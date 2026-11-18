@@ -41,3 +41,5 @@ Any `SmartMode` constant can be set with `SM_<NAME>=<value>` (1.6.9), e.g. a tol
 ```
 SM_POWER_TOLERANCE=15 SM_RELEASE_LOOKBACK=90 SCENARIO=file P1FILE=p1_2026-11-16.csv FROM=15:00 CAPACITY=5280 LATENCY=1.5 RAMP_W=250 REPORT_S=3 python scripts/compare_smart_mode.py . 1.6.9 out.json
 ```
+
+Direction change (1.7.0): `DIRECT=1` sets *Direction change: Direct* on all inverters (a running inverter that gets the other direction ramps through 0 W at `RAMP_W`, without `MODE_SWITCH` and start delay). `STOP_W=<W/s>` is the speed of a stop to 0 W (`CALIB=1`: 1000 W/s, measured 13-18 November; otherwise `RAMP_W`). `FLIP_MIN=<s>` sets the minimum pause at 0 W (default 2 s). `NDEV=1` or `2` simulates fewer inverters (default 3).

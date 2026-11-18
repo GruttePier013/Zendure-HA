@@ -644,6 +644,13 @@
           "on": "Aan",
           "off": "Uit"
         }
+      },
+      "direction_change": {
+        "name": "Richtingswissel",
+        "state": {
+          "via_zero": "Via 0 W (stop, pauze, start)",
+          "direct": "Direct (alleen AC-mode)"
+        }
       }
     },
     "switch": {

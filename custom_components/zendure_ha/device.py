@@ -948,6 +948,7 @@ class ZendureDevice(EntityDevice):
     async def power_charge(self, power: int) -> int:
         """Set charge power (negative value); a change of direction passes through 0 W first."""
         target = min(0, max(power, self.capped_limit(False)))
+        self._direct_event(target)
         power = self.slew.limit(target)
         self._track_direction(target)
         if power > 0:
@@ -977,6 +978,7 @@ class ZendureDevice(EntityDevice):
     async def power_discharge(self, power: int) -> int:
         """Set discharge power; a change of direction passes through 0 W first."""
         target = max(0, min(power, self.capped_limit(True)))
+        self._direct_event(target)
         power = self.slew.limit(target)
         self._track_direction(target)
         if power < 0:
@@ -1055,6 +1057,12 @@ class ZendureDevice(EntityDevice):
         if power != getattr(self, "_last_event_power", None):
             self._last_event_power = power
             events.emit("cmd_sent", self.name, power=power, ac_mode="input" if power < 0 else "output" if power > 0 else "-")
+
+    def _direct_event(self, target: int) -> None:
+        """1.7.0: a running inverter with *Direction change: direct* is turned straight to the other direction."""
+        current = self.slew.current
+        if self.slew.direct and abs(current) >= ZERO_BAND and abs(target) >= ZERO_BAND and current * target < 0:
+            events.emit("dir_direct", self.name, **{"from": _dir_name(1 if current > 0 else -1), "to": _dir_name(1 if target > 0 else -1)}, command=current, target=target, measured=self.homeOutput.asInt - self.homeInput.asInt)
 
     def _track_direction(self, target: int) -> None:
         """Follow a change of direction of this device from the request until it runs the other way."""
@@ -1257,6 +1265,8 @@ class ZendureZenSdk(ZendureDevice):
         super().__init__(hass, deviceId, name, model, definition, parent)
         self.connection = ZendureRestoreSelect(self, "connection", {0: "cloud", 2: "zenSDK"}, self.mqttSelect, 0)
         self.connection._attr_entity_category = EntityCategory.CONFIG
+        # 1.7.0: how this inverter changes between charging and discharging (Controls, next to the AC mode)
+        self.directionChange = ZendureRestoreSelect(self, "direction_change", dict(enumerate(DIRECTION_CHANGE)), self.update_direction_change, 0)
         self.httpid = 0
         self.httpErrors = ZendureSensor(self, "httpErrors", None, None, None, "total_increasing", 0, state=0, category=EntityCategory.DIAGNOSTIC)
         self.ipAddressSensor = ZendureSensor(self, "ipAddress", state=self.ipAddress, category=EntityCategory.DIAGNOSTIC)
@@ -1386,6 +1396,15 @@ class ZendureZenSdk(ZendureDevice):
         """Set the power off. The first time the safe 0 W state is also stored in the flash of the device."""
         await self._power_command(2, 0, 0, persist=True)
 
+    def update_direction_change(self, _entity: Any, value: Any) -> None:
+        """Via 0 W (stop, pause, start) or direct (only the AC mode is switched; the inverter ramps through 0 W)."""
+        option = DIRECTION_CHANGE[value] if isinstance(value, int) and 0 <= value < len(DIRECTION_CHANGE) else str(value)
+        if option not in DIRECTION_CHANGE:
+            return
+        if self.slew.direct != (option == "direct"):
+            _LOGGER.info("%s: change of direction %s", self.name, "direct (AC mode only)" if option == "direct" else "via 0 W")
+        self.slew.direct = option == "direct"
+
     async def prepare(self, direction: int) -> bool:
         """Set the AC mode of an idle device to the direction of its role (1 = input/charge, 2 = output/discharge).
 
@@ -1416,6 +1435,8 @@ class ZendureZenSdk(ZendureDevice):
         current = getattr(self, "ac_mode_sent", None) or self.acMode.value
         if current in (None, ac_mode) or (output == 0 and input_ == 0):
             return
+        if self.slew.direct:
+            return  # 1.7.0: only the AC mode changes, in the power command itself; the inverter ramps through 0 W
         old_output, old_input = getattr(self, "limits_sent", (self.limitOutput.asInt, self.limitInput.asInt))
         if not (old_output or old_input) and self.homeInput.asInt == 0 and self.homeOutput.asInt == 0:
             # 1.6.2: the device is at 0 W (commanded and measured): the new AC mode and the new limit go in one command,
@@ -1442,6 +1463,15 @@ class ZendureZenSdk(ZendureDevice):
         if self.asleep and (output or input_):
             events.emit("wake", self.name, output=output, input=input_)
         self.asleep = persist and not output and not input_  # the stored safe state is smartMode 0: asleep as well
+        current = getattr(self, "ac_mode_sent", None) or self.acMode.value
+        if self.slew.direct and current not in (None, ac_mode) and (output or input_):
+            # 1.7.0 direct change of direction, as tested on 18 November: both limits are set and only the AC mode
+            # changes. The limit of the old direction stays as it was in this command; the next command clears it.
+            old_output, old_input = getattr(self, "limits_sent", (self.limitOutput.asInt, self.limitInput.asInt))
+            if ac_mode == 1:
+                output = old_output
+            else:
+                input_ = old_input
         await self._switch_ac_mode(ac_mode, output, input_)
         properties = {"smartMode": 0 if persist else 1, "acMode": ac_mode, "outputLimit": output, "inputLimit": input_}
         self.ac_mode_sent = ac_mode
@@ -1645,4 +1675,5 @@ def _dir_name(direction: int) -> str:
     return "discharge" if direction > 0 else "charge" if direction < 0 else "standby"
 
 
+DIRECTION_CHANGE = ("via_zero", "direct")  # 1.7.0: select *Direction change* of a zenSDK inverter
 DIR_NOT_NEEDED = 5.0  # s: a released change of direction without a start in the new direction ends as "not_needed"

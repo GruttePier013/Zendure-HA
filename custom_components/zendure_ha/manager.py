@@ -1933,9 +1933,15 @@ class ZendureManager(DataUpdateCoordinator[None], EntityDevice):
 
         # stop discharging devices, in parallel with starting / scaling the charging devices
         # (bypassing devices are not stopped; a gridOff device keeps -10 W so it does not use power from the grid)
-        stopping = [asyncio.ensure_future(d.power_discharge(0 if d.pwr_offgrid == 0 else -10)) for d in self.discharge if d.byPass.asInt <= 0]
+        direct = self._direct_candidates(self.discharge, False)
+        stopping = [asyncio.ensure_future(d.power_discharge(0 if d.pwr_offgrid == 0 else -10)) for d in self.discharge if d.byPass.asInt <= 0 and d not in direct]
         try:
             await self._charge_devices(setpoint, time, hysteresis)
+            # a direct inverter that is not needed for charging (or waits for the charge delay) stops as before;
+            # keeping it running through a short charge delay was simulated too: more export, no less import
+            for d in direct:
+                if d.slew.current >= ZERO_BAND:
+                    stopping.append(asyncio.ensure_future(d.power_discharge(0)))
         finally:
             await self._finish(stopping)
 
@@ -1946,6 +1952,37 @@ class ZendureManager(DataUpdateCoordinator[None], EntityDevice):
         for result in await asyncio.gather(*stopping, return_exceptions=True):
             if isinstance(result, BaseException):
                 _LOGGER.error("Stopping a device failed: %s", result)
+
+    def _direct_candidates(self, running: list[Any], discharge: bool) -> list[Any]:
+        """1.7.0: inverters with *Direction change: direct* that run the other way may turn at once.
+
+        They are not stopped first but offered as idle devices, before the others: when the new direction needs an
+        inverter, such a device only switches its AC mode and ramps through 0 W (18 November: about 6 s to the new
+        direction, against 9-11 s for a start from 0 W). Devices that are not needed are stopped as before.
+        """
+        if getattr(self, "operation", None) == ManagerMode.MANUAL:
+            return []
+        empty = DeviceState.SOCEMPTY if discharge else DeviceState.SOCFULL
+        out = [
+            d
+            for d in running
+            if getattr(getattr(d, "slew", None), "direct", False) and d.byPass.asInt <= 0 and d.pwr_offgrid == 0 and d.state not in (empty, DeviceState.OFFLINE)
+        ]
+        for d in out:
+            running.remove(d)
+            self.idle.append(d)
+            level = d.electricLevel.asInt
+            self.idle_lvlmax = max(self.idle_lvlmax, level)
+            self.idle_lvlmin = min(self.idle_lvlmin, level)
+        return out
+
+    @staticmethod
+    def _running_other_way(d: Any, discharge: bool) -> bool:
+        """True for a direct inverter that still runs in the other direction (it is started first: no start delay)."""
+        slew = getattr(d, "slew", None)
+        if not getattr(slew, "direct", False):
+            return False
+        return slew.current <= -ZERO_BAND if discharge else slew.current >= ZERO_BAND
 
     async def _charge_devices(self, setpoint: int, time: datetime, hysteresis: bool) -> None:
         self._hold_released(self.charge, time, False)
@@ -2013,7 +2050,7 @@ class ZendureManager(DataUpdateCoordinator[None], EntityDevice):
         # start idle device if needed
         if dev_start < 0 and len(self.idle) > 0:
             # the device with the charge role first, then the lowest SoC
-            self.idle.sort(key=lambda d: (d.deviceId != self.roles.charger, d.electricLevel.asInt))
+            self.idle.sort(key=lambda d: (not self._running_other_way(d, False), d.deviceId != self.roles.charger, d.electricLevel.asInt))
             missing = requested - (demand - setpoint)  # the (negative) part that the running devices cannot take
             starts = []
             for d in self.idle:
@@ -2049,9 +2086,13 @@ class ZendureManager(DataUpdateCoordinator[None], EntityDevice):
         # stop charging devices, in parallel with scaling up the discharging devices: at a peak the charger ramps
         # down while the device that was kept ready ramps up, instead of one after the other.
         # SF 2400 may show more gridInputPower than offGridPower and will be recognized as charging, so set power to 10 instead of 0
-        stopping = [asyncio.ensure_future(d.power_discharge(0 if max(0, d.pwr_offgrid) == 0 else 10)) for d in self.charge]
+        direct = self._direct_candidates(self.charge, True)
+        stopping = [asyncio.ensure_future(d.power_discharge(0 if max(0, d.pwr_offgrid) == 0 else 10)) for d in self.charge if d not in direct]
         try:
             await self._discharge_devices(setpoint, time or datetime.now())
+            for d in direct:
+                if d.slew.current <= -ZERO_BAND:  # not needed for discharging: it stops
+                    stopping.append(asyncio.ensure_future(d.power_discharge(0)))
         finally:
             await self._finish(stopping)
 
@@ -2114,7 +2155,7 @@ class ZendureManager(DataUpdateCoordinator[None], EntityDevice):
         # start idle device if needed
         if dev_start > 0 and len(self.idle) > 0:
             # the device with the discharge role first, then the highest SoC
-            self.idle.sort(key=lambda d: (d.deviceId != self.roles.discharger, -d.electricLevel.asInt))
+            self.idle.sort(key=lambda d: (not self._running_other_way(d, True), d.deviceId != self.roles.discharger, -d.electricLevel.asInt))
             missing = requested - (served - setpoint)  # the part that the running devices cannot deliver
             starts = []
             for d in self.idle:

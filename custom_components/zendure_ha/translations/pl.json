@@ -644,6 +644,13 @@
           "on": "Włączony",
           "off": "Wyłączony"
         }
+      },
+      "direction_change": {
+        "name": "Zmiana kierunku",
+        "state": {
+          "via_zero": "Przez 0 W (stop, pauza, start)",
+          "direct": "Bezpośrednio (tylko tryb AC)"
+        }
       }
     },
     "switch": {

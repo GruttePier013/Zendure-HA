@@ -59,6 +59,7 @@
 | `stop_abrupt` | Power fell more than 800 W between two cycles with the same command |
 | `stale_control` | The watchdog fired |
 | `p1_jump` | P1 jumped by more than the peak detection: a control cycle at once; `direction=import` (a load switched on) or `export` (a load switched off while discharging, or the sun came out) |
+| `dir_direct` | A running inverter with *Direction change: Direct* got the other direction: only the AC mode changes (`from`, `to`, `command`, `target`, `measured`) |
 | `bms_limit`, `bms_limit_end` | The battery (BMS) of a device gives at least 150 W (or 10 %) less than a command of 300 W or more for 30 s, for example a charge that tapers near full: the device gets a cap; the cap ends when the device gives the cap + 100 W for 10 s, or stops |
 | `target_change` | The P1 target changed |
 

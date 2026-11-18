@@ -189,3 +189,16 @@ def test_device_that_still_reports_power_is_waited_for() -> None:
     lim.measure(0)
     clock.now += 1
     assert lim.limit(800) > 0  # confirmed now
+
+
+def test_direct_turns_at_once_without_a_pause() -> None:
+    clock = _Clock()
+    lim = _limiter(clock, flip=6)
+    lim.direct = True
+    lim.current, lim._updated, lim._last_dir = -1200, clock.now, -1  # noqa: SLF001
+    clock.now += 1
+    assert lim.limit(1500) == 1500  # straight from charging to discharging: the inverter ramps through 0 W
+    assert lim.pending is False
+    lim.direct = False
+    clock.now += 1
+    assert lim.limit(-800) == 0  # via 0 W again
