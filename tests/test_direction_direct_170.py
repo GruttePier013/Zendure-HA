@@ -23,8 +23,9 @@ def _props(device) -> list[dict]:  # noqa: ANN001
     return [c["properties"] for c in device.mqtt_commands]
 
 
-def test_the_pause_at_0_w_is_250_ms() -> None:
-    assert FLIP_MIN == 0.25
+def test_the_pause_at_0_w_stays_2_s() -> None:
+    """0.25 s was simulated in 1.7.0: no gain with three inverters, so the margin for the relay stays."""
+    assert FLIP_MIN == 2.0
 
 
 async def test_the_select_switches_the_limiter(zensdk_device) -> None:  # noqa: ANN001

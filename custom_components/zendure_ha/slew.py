@@ -25,7 +25,9 @@ import time as _time
 from collections.abc import Callable
 
 DEFAULT_FLIP_DELAY = 6  # seconds at 0 W before the direction may change when no measurement confirms 0 W
-FLIP_MIN = 0.25  # seconds at 0 W before the direction may change, also when 0 W is confirmed (1.7.0: was 2 s)
+# 1.7.0: 0.25 s was simulated and is not used. With three inverters it changed nothing (the roles let different inverters
+# charge and discharge), with one inverter at most 0.3-0.6 Wh per change; the 2 s at 0 W stay as a margin for the relay.
+FLIP_MIN = 2.0  # seconds at 0 W before the direction may change, also when 0 W is confirmed
 FLIP_MAX = 15.0  # seconds: the longest wait for a device that still reports power after the stop
 MEASURE_LAG = 1.0  # seconds: a measurement this soon after the stop may still be from before it
 DEFAULT_MIN_RUN = 10  # seconds a started device keeps running before it may return to 0 W (0 = off)
