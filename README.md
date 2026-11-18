@@ -11,7 +11,7 @@ Zendure HA-GP013 steers Zendure SolarFlow, Hyper, Hub, AIO and Ace devices towar
 
 > Not an official Zendure product.
 
-## Why this one instead of Zendure-HA?
+## Added value over the standard integration: Zendure-HA
 
 | | Zendure-HA | Zendure HA-GP013 |
 |---|---|---|
