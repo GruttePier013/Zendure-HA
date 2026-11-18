@@ -733,6 +733,7 @@ async def main() -> None:
     if os.environ.get("DAY_SOC"):
         socs = [float(x) for x in os.environ["DAY_SOC"].split(",")]
     devices = [Device(name, socs[i] if i < len(socs) else soc) for i, (name, soc) in enumerate((("A", 35), ("B", 50), ("C", 65)))]
+    devices = devices[: int(os.environ.get("NDEV", "3"))]  # 1.7.0: NDEV=1 or 2 simulates fewer inverters
     m = make_manager(devices)
     if NEW and "ready2" in os.environ.get("VARIANT", "").split(","):
         # two inverters share the load (fill level 1 %) from 5 minutes before to 5 minutes after cooking (hob scenario)

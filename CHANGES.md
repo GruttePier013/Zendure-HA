@@ -19,10 +19,10 @@ From the test of 18 November 12:13-12:14 (L1 turned by hand with both limits set
   - Simulation (`CALIB=1 CONFIRM=1`, three SolarFlow 2400 AC+): |P1| −8 % on a spring day, −4 % with a pulsing hob and clouds, −1 % with changing clouds, ±1 % on the recorded evenings of 13, 15, 16 and the morning of 18 November, **+1 % on a November day** (more small changes of direction). Off by default.
 
 ### Changed
-- **Pause at 0 W 250 ms** (`FLIP_MIN`, was 2 s) once a fresh report confirms 0 W. A report within 1 s after the stop still does not count (`MEASURE_LAG`), so in practice the change is released 1-2 s after the stop. In the simulation without effect: the manager changes direction on one inverter only a few times a day, the roles use different inverters.
+- **Pause at 0 W 250 ms** (`FLIP_MIN`, was 2 s) once a fresh report confirms 0 W. A report within 1 s after the stop still does not count (`MEASURE_LAG`), so in practice the change is released 1-2 s after the stop. Simulated (`CALIB=1 CONFIRM=1`): with three inverters no effect, because the roles let different inverters charge and discharge (4-11 changes of direction on one inverter a day). With one inverter (`NDEV=1`): −45 Wh import on a spring day (|P1| −0.6 %), −28 Wh with a pulsing hob (−2.2 %), no change on a November day and with changing clouds. Only charging → discharging gains: discharging → charging already waits the charge delay (2-60 s).
 
 ### Simulation
-- `DIRECT=1`, `STOP_W=<W/s>` (a stop is faster than a ramp: 1000 W/s with `CALIB=1`, measured 13-18 November) and `FLIP_MIN=<s>`. `CALIB=1` now includes `STOP_W=1000`.
+- `NDEV=1` or `2` simulates fewer inverters. `DIRECT=1`, `STOP_W=<W/s>` (a stop is faster than a ramp: 1000 W/s with `CALIB=1`, measured 13-18 November) and `FLIP_MIN=<s>`. `CALIB=1` now includes `STOP_W=1000`.
 
 ## [1.6.9] - 2026-11-18
 
