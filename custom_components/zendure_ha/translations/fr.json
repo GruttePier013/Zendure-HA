@@ -644,6 +644,13 @@
           "on": "Activé",
           "off": "Désactivé"
         }
+      },
+      "direction_change": {
+        "name": "Changement de sens",
+        "state": {
+          "via_zero": "Via 0 W (arrêt, pause, démarrage)",
+          "direct": "Direct (mode AC seulement)"
+        }
       }
     },
     "switch": {

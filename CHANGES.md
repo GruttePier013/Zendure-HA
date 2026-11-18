@@ -6,6 +6,24 @@ Zendure HA-GP013 started from [Zendure-HA](https://github.com/Zendure/Zendure-HA
 
 Effects in brackets come from the simulation (`scripts/compare_smart_mode.py`, three SolarFlow 2400 AC+ with measured ramp, latency and losses), not from measurements in a house.
 
+## [1.7.0] - 2026-11-18
+
+From the test of 18 November 12:13-12:14 (L1 turned by hand with both limits set, only the AC mode switched: −1490 → +1960 W in 15 s, through 0 W without a pause and without a start delay).
+
+### Added
+- **Direction change per inverter** (select in the controls of each zenSDK inverter): *Via 0 W* (default, as before) or *Direct*.
+  - *Direct*: a running inverter that has to change direction gets the new AC mode and limit in one command; the limit of the old direction stays as it was in that command (as in the test) and is cleared by the next one. The slew limiter does not hold the change. The inverter ramps through 0 W by itself (about 230 W/s).
+  - The manager offers such an inverter to the new direction first, before an idle one: no start delay of 9-11 s. When it is not needed, it stops as before.
+  - The charge delay from discharging to charging stays; the inverter stops during it as before. Keeping it running through a short delay was simulated too: more export, no less import.
+  - Event `dir_direct`.
+  - Simulation (`CALIB=1 CONFIRM=1`, three SolarFlow 2400 AC+): |P1| −8 % on a spring day, −4 % with a pulsing hob and clouds, −1 % with changing clouds, ±1 % on the recorded evenings of 13, 15, 16 and the morning of 18 November, **+1 % on a November day** (more small changes of direction). Off by default.
+
+### Changed
+- **Pause at 0 W 250 ms** (`FLIP_MIN`, was 2 s) once a fresh report confirms 0 W. A report within 1 s after the stop still does not count (`MEASURE_LAG`), so in practice the change is released 1-2 s after the stop. In the simulation without effect: the manager changes direction on one inverter only a few times a day, the roles use different inverters.
+
+### Simulation
+- `DIRECT=1`, `STOP_W=<W/s>` (a stop is faster than a ramp: 1000 W/s with `CALIB=1`, measured 13-18 November) and `FLIP_MIN=<s>`. `CALIB=1` now includes `STOP_W=1000`.
+
 ## [1.6.9] - 2026-11-18
 
 From the recordings of 13, 15 and 16 November (smart, manual and charge mode; 1.6.6 and 1.6.8).

@@ -138,8 +138,10 @@ def test_follow_keeps_the_pause_right_after_stopping() -> None:
     lim = _limiter(clock)
     lim.current, lim._updated, lim._last_dir = -1200, clock.now, -1  # noqa: SLF001
     lim.follow(0)
-    clock.now += 1
-    assert lim.limit(2000) == 0  # 1 s after it stopped charging: below the 2 s minimum
+    clock.now += 0.2
+    assert lim.limit(2000) == 0  # 0.2 s after it stopped charging: below the minimum of 0.25 s (1.7.0)
+    clock.now += 0.1
+    assert lim.limit(2000) > 0
 
 
 def _stopped(clock: _Clock) -> SlewLimiter:
@@ -151,14 +153,28 @@ def _stopped(clock: _Clock) -> SlewLimiter:
     return lim
 
 
-def test_confirmed_zero_releases_the_direction_change_after_two_seconds() -> None:
+def test_confirmed_zero_releases_the_direction_change_at_once() -> None:
     clock = _Clock()
     lim = _stopped(clock)
-    clock.now += 1.5
-    lim.measure(0)  # fresh measurement (1.5 s after the stop): 0 W
-    assert lim.limit(800) == 0  # still below the 2 s minimum
-    clock.now += 0.5
-    assert lim.limit(800) > 0  # 2 s and confirmed: released
+    clock.now += 0.2
+    lim.measure(0)  # a report 0.2 s after the stop may still be from before it (MEASURE_LAG)
+    assert lim.limit(800) == 0
+    clock.now += 0.9
+    lim.measure(0)  # fresh measurement (1.1 s after the stop): 0 W
+    assert lim.limit(800) > 0  # confirmed and above the minimum of 0.25 s (1.7.0, was 2 s): released
+
+
+def test_direct_turns_at_once_without_a_pause() -> None:
+    clock = _Clock()
+    lim = _limiter(clock, flip=6)
+    lim.direct = True
+    lim.current, lim._updated, lim._last_dir = -1200, clock.now, -1  # noqa: SLF001
+    clock.now += 1
+    assert lim.limit(1500) == 1500  # straight from charging to discharging: the inverter ramps through 0 W
+    assert lim.pending is False
+    lim.direct = False
+    clock.now += 1
+    assert lim.limit(-800) == 0  # via 0 W again
 
 
 def test_measurement_right_after_the_stop_does_not_count() -> None:

@@ -69,6 +69,11 @@ if NEW:
     from custom_components.zendure_ha.dispatch import RoleSelector
     from custom_components.zendure_ha.slew import SlewLimiter
 
+    if os.environ.get("FLIP_MIN"):  # 1.7.0: e.g. FLIP_MIN=2 for the pause at 0 W of 1.6.x
+        import custom_components.zendure_ha.slew as _slew_module
+
+        _slew_module.FLIP_MIN = float(os.environ["FLIP_MIN"])
+
 DT = 0.1
 SCENARIO = os.environ.get("SCENARIO", "base")  # base | ramp | clouds | file
 PV_PEAK = float(os.environ.get("PV_PEAK", "4500"))
@@ -150,7 +155,7 @@ SLEEP_AFTER = float(os.environ.get("SLEEP_AFTER", "0"))  # minutes, 0 = off
 CALIB = os.environ.get("CALIB", "0") != "0"
 if CALIB:
     for _k, _v in (("LATENCY", "1.06"), ("RAMP_W", "250"), ("REPORT_S", "2"), ("START_DIS", "6.0"), ("START_CHG", "9.0"),
-                   ("MODE_SWITCH", "10"), ("WAKE_S", "0")):  # fmt: skip
+                   ("MODE_SWITCH", "10"), ("WAKE_S", "0"), ("STOP_W", "1000")):  # fmt: skip
         os.environ.setdefault(_k, _v)
     LATENCY, RAMP_W, REPORT_S = float(os.environ["LATENCY"]), float(os.environ["RAMP_W"]), float(os.environ["REPORT_S"])
 START_DIS = float(os.environ.get("START_DIS", "0"))  # extra s for a discharge start from 0 W
@@ -159,6 +164,11 @@ WAKE_S = float(os.environ.get("WAKE_S", "2"))
 READY_HOURS = [] if os.environ.get("READY_HOURS", "") in ("", "none") else [tuple(int(h) for h in w.split("-")) for w in os.environ["READY_HOURS"].split(",")]
 READY_NEVER = os.environ.get("READY_HOURS", "") == "none"
 MODE_SWITCH = float(os.environ.get("MODE_SWITCH", "1.0"))
+# 1.7.0: STOP_W=<W/s> the speed of a stop to 0 W (measured 13-18 November: 1000 W/s or more; default RAMP_W, as before);
+# DIRECT=1 sets *Direction change: direct* on all inverters: a running inverter that gets the other direction only
+# switches its AC mode and ramps through 0 W at RAMP_W, without MODE_SWITCH and without a start delay (18 November)
+STOP_W = float(os.environ.get("STOP_W", "0"))
+DIRECT = os.environ.get("DIRECT", "0") != "0"
 CONFIRM = float(os.environ.get("CONFIRM", "0"))
 LOSS = os.environ.get("LOSS", "1") != "0"  # inverter losses are on by default since 1.6.2 (LOSS=0: as before)
 ASSUME_ZERO = float(os.environ.get("ASSUME_ZERO", "0"))
@@ -472,6 +482,8 @@ class Device:
         self._last_cmd_dir = 0
         self.start_times: list[float] = []
         self.slew = SlewLimiter(clock) if NEW else SimpleNamespace(pending=False)
+        if NEW and DIRECT:
+            self.slew.direct = True
         if NEW and hasattr(self.slew, "ready_up"):
             self.slew.ready_up = 1200  # 1.5.x: the integration still limited the ramp
         self.asleep = False
@@ -497,7 +509,8 @@ class Device:
         before = self.actual
         self.actual += (target - self.actual) * (1 - math.exp(-DT / TAU))
         if RAMP_W:
-            self.actual = before + max(-RAMP_W * DT, min(RAMP_W * DT, self.actual - before))
+            rate = STOP_W if STOP_W and target == 0 else RAMP_W  # a stop is faster than a ramp (1.7.0)
+            self.actual = before + max(-rate * DT, min(rate * DT, self.actual - before))
         if abs(before) < 10 <= abs(self.actual):
             self.starts += 1
             self.start_times.append(round(SIM["t"] / 60, 1))
@@ -585,7 +598,10 @@ class Device:
         if direction:
             mode = 2 if direction > 0 else 1
             if self.ac_mode is not None and self.ac_mode != mode:
-                wake += MODE_SWITCH  # the AC mode changes before the new limit applies
+                if not (getattr(self.slew, "direct", False) and abs(self.actual) >= 10):
+                    wake += MODE_SWITCH  # the AC mode changes before the new limit applies
+                else:
+                    STATS["direct_flips"] = STATS.get("direct_flips", 0) + 1  # it ramps through 0 W by itself
                 self.mode_switches += 1
             self.ac_mode = mode
         elif abs(self.actual) >= 10:
@@ -1059,6 +1075,7 @@ async def main() -> None:
         "cloud_toggles": stats.get("cloud_toggles", 0),
         "reserve_low_min": round(stats.get("reserve_low_s", 0) / 60),
         "reversals_under_load": STATS["reversals_under_load"],
+        "direct_flips": STATS.get("direct_flips", 0),
         "reversal_avg_w": round(STATS["reversal_w"] / STATS["reversals_under_load"]) if STATS["reversals_under_load"] else 0,
         "start_latency_median_s": round(sorted(STATS.get("start_s", [0]))[len(STATS.get("start_s", [0])) // 2], 1),
         "start_latency_charge_median_s": round(sorted(STATS.get("start_chg_s", [0]))[len(STATS.get("start_chg_s", [0])) // 2], 1),

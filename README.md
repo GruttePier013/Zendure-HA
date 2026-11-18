@@ -27,6 +27,11 @@ In the simulation (three SolarFlow 2400 AC+, measured ramp and latency) this giv
 
 Changes in Zendure-HA (new devices, protocol fixes) are taken over where they fit; the latest is noted in [CHANGES.md](CHANGES.md).
 
+## What's new in 1.7.0
+
+- 🔄 **Direct change of direction** per inverter (select *Direction change*): only the AC mode is switched and the inverter ramps through 0 W by itself, without stop, pause and start (18 November: power in the new direction after ≈ 6 s instead of ≈ 12–14 s). Off by default; see the table below.
+- ⏸️ **Pause at 0 W 250 ms** instead of 2 s, once 0 W is measured.
+
 ## What's new in 1.6.9
 
 - 🌥️ **Changing clouds mode by hand**: *Auto*, *On* or *Off*, with its own **P1 target (clouds)**.
@@ -83,6 +88,22 @@ flowchart LR
 
 Both targets work together: the **band** always applies; in the changing clouds mode the **clouds** target applies too, and the larger export counts (they do not add up).
 
+### 🔌 Per inverter: Controls
+
+Next to *AC Input Limit*, *Output Limit* and *AC Operation Mode* every zenSDK inverter (SolarFlow 800 / 1600 / 2400 / 4000) has:
+
+| | Entity | Values | What it does |
+|---|---|---|---|
+| 🔄 | **Direction change** | **Via 0 W** (default) · **Direct** | **Via 0 W**: stop, wait for a measured 0 W (at least 250 ms), then start in the other direction. The start costs the inverter 9–11 s. **Direct**: a running inverter only switches its AC mode and ramps through 0 W (≈ 230 W/s); the manager turns it instead of starting another one. |
+
+```mermaid
+flowchart LR
+    A(["⚡ +1500 W<br/>discharging"]) -- "Via 0 W" --> B["⏹️ stop ≈ 1.5 s"] --> C["⏸️ 0 W confirmed<br/>≥ 250 ms"] --> D["⏳ start 9–11 s"] --> E(["🔋 −1500 W<br/>≈ 20 s"])
+    A -- "Direct" --> F["🔄 AC mode only<br/>ramps through 0 W ≈ 230 W/s"] --> G(["🔋 −1500 W<br/>≈ 13 s"])
+```
+
+> 🧪 In the simulation *Direct* gave 4–8 % less import + export with cooking and in spring, about the same with the recorded evenings, and 1 % more on a November day (more small changes of direction). Measured in a house only twice so far (18 November); try it with a [recording](docs/recording.md) and compare.
+
 ### ⚙️ Options menu
 
 <details open>
@@ -106,7 +127,7 @@ Both targets work together: the **band** always applies; in the changing clouds 
 
 | Setting | Default | What it does |
 |---|---|---|
-| ⏸️ Delay before a change of direction | 6 s | Between charging and discharging the inverter always passes 0 W; without a measured 0 W it waits this long |
+| ⏸️ Delay before a change of direction | 6 s | *Via 0 W*: between charging and discharging the inverter passes 0 W. With a measured 0 W it may turn after 250 ms; without a measurement it waits this long. Not used with *Direction change: Direct*. |
 | ⏳ Minimum run time | 10 s | A started inverter keeps a low power this long, so a short dip does not make the relay chatter |
 
 </details>
