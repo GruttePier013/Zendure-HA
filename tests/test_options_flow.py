@@ -59,7 +59,7 @@ async def test_slew_step_stores_values_and_returns_to_menu(hass, entry) -> None:
 async def test_power_control_rejects_fast_longer_than_normal(hass, entry) -> None:  # noqa: ANN001
     result = await _menu(hass, entry)
     result = await hass.config_entries.options.async_configure(result["flow_id"], {"next_step_id": "power_control"})
-    values = {CONF_TIMEZERO: 4, CONF_TIMEFAST: 9, "p1_stddev_min": 15, "power_start": 50, "power_tolerance": 5, "manual_interval": 15, "peak_limit": 0, "export_bias": 100, "jump_w": 400}
+    values = {CONF_TIMEZERO: 4, CONF_TIMEFAST: 9, "p1_stddev_min": 15, "power_start": 50, "power_tolerance": 5, "manual_interval": 15, "peak_limit": 0, "jump_w": 400}
     result = await hass.config_entries.options.async_configure(result["flow_id"], values)
     assert result["type"] is FlowResultType.FORM
     assert result["errors"] == {CONF_TIMEFAST: "fast_longer_than_normal"}
@@ -68,7 +68,7 @@ async def test_power_control_rejects_fast_longer_than_normal(hass, entry) -> Non
 async def test_power_control_stores_the_peak_detection(hass, entry) -> None:  # noqa: ANN001
     result = await _menu(hass, entry)
     result = await hass.config_entries.options.async_configure(result["flow_id"], {"next_step_id": "power_control"})
-    values = {CONF_TIMEZERO: 4, CONF_TIMEFAST: 2, "p1_stddev_min": 15, "power_start": 50, "power_tolerance": 5, "manual_interval": 15, "peak_limit": 0, "export_bias": 100, "jump_w": 600}
+    values = {CONF_TIMEZERO: 4, CONF_TIMEFAST: 2, "p1_stddev_min": 15, "power_start": 50, "power_tolerance": 5, "manual_interval": 15, "peak_limit": 0, "jump_w": 600}
     result = await hass.config_entries.options.async_configure(result["flow_id"], values)
     assert result["type"] is FlowResultType.MENU
     assert entry.data["jump_w"] == 600

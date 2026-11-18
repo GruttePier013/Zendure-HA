@@ -38,22 +38,22 @@ class FuseGroup:
         if self.initCharge:
             self.initCharge = False
             if len(self.devices) == 1:
-                d.pwr_max = max(self.minpower, d.charge_limit)
+                d.pwr_max = max(self.minpower, _limit(d, False))
             else:
                 limit = 0
                 weight = 0
                 for fd in self.devices:
                     if fd.homeInput.asInt > 0:
-                        limit += fd.charge_limit
-                        weight += (100 - fd.electricLevel.asInt) * fd.charge_limit
+                        limit += _limit(fd, False)
+                        weight += (100 - fd.electricLevel.asInt) * _limit(fd, False)
                 avail = max(self.minpower, limit)
                 for fd in self.devices:
                     if fd.homeInput.asInt > 0:
-                        fd.pwr_max = int(avail * ((100 - fd.electricLevel.asInt) * fd.charge_limit) / weight) if weight < 0 else fd.charge_start
-                        limit -= fd.charge_limit
+                        fd.pwr_max = int(avail * ((100 - fd.electricLevel.asInt) * _limit(fd, False)) / weight) if weight < 0 else fd.charge_start
+                        limit -= _limit(fd, False)
                         if limit > avail - fd.pwr_max:
                             fd.pwr_max = max(avail - limit, avail)
-                        fd.pwr_max = max(fd.pwr_max, fd.charge_limit)
+                        fd.pwr_max = max(fd.pwr_max, _limit(fd, False))
                         avail -= fd.pwr_max
 
         return d.pwr_max
@@ -63,22 +63,30 @@ class FuseGroup:
         if self.initDischarge:
             self.initDischarge = False
             if len(self.devices) == 1:
-                d.pwr_max = min(self.maxpower, d.discharge_limit)
+                d.pwr_max = min(self.maxpower, _limit(d, True))
             else:
                 limit = 0
                 weight = 0
                 for fd in self.devices:
                     if fd.homeOutput.asInt > 0:
-                        limit += fd.discharge_limit
-                        weight += fd.electricLevel.asInt * fd.discharge_limit
+                        limit += _limit(fd, True)
+                        weight += fd.electricLevel.asInt * _limit(fd, True)
                 avail = min(self.maxpower, limit)
                 for fd in self.devices:
                     if fd.homeOutput.asInt > 0:
-                        fd.pwr_max = int(avail * (fd.electricLevel.asInt * fd.discharge_limit) / weight) if weight > 0 else fd.discharge_start
-                        limit -= fd.discharge_limit
+                        fd.pwr_max = int(avail * (fd.electricLevel.asInt * _limit(fd, True)) / weight) if weight > 0 else fd.discharge_start
+                        limit -= _limit(fd, True)
                         if limit < avail - fd.pwr_max:
                             fd.pwr_max = min(avail - limit, avail)
-                        fd.pwr_max = min(fd.pwr_max, fd.discharge_limit)
+                        fd.pwr_max = min(fd.pwr_max, _limit(fd, True))
                         avail -= fd.pwr_max
 
         return d.pwr_max
+
+
+def _limit(d: ZendureDevice, discharge: bool) -> int:
+    """The limit of a device within its BMS cap (1.6.9); a device without the cap logic uses its plain limit."""
+    capped = getattr(d, "capped_limit", None)
+    if capped is not None:
+        return capped(discharge)
+    return d.discharge_limit if discharge else d.charge_limit

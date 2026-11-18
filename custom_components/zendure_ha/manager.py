@@ -95,6 +95,9 @@ ACTIVITY_LABELS = {
 RESIDUAL_AGE = 5.0  # s: a small command on a standby device that is older than this is cleared
 TARGET_MAX = 200  # W: range of the P1 target
 TARGET_STEP = 5  # W
+CLOUD_TARGET_MAX = 500  # W: range of the P1 target during changing clouds (export only)
+CLOUD_TARGET_STEP = 10  # W
+CLOUD_CONTROL = ("auto", "on", "off")  # 1.6.9: the changing clouds mode is detected (auto) or set by hand
 
 SMART_MODES = (ManagerMode.MATCHING, ManagerMode.MATCHING_CHARGE, ManagerMode.MATCHING_DISCHARGE, ManagerMode.STORE_SOLAR)
 MODE_NAMES = {
@@ -127,11 +130,14 @@ class ZendureManager(DataUpdateCoordinator[None], EntityDevice):
     fast_track_total: int = 0  # fast adjustments between two control cycles
     stale_total: int = 0  # stale control episodes (watchdog)
     p1_target: int = 0  # W, see p1_band
+    cloud_control: str = "auto"  # 1.6.9: auto = detected, on / off = set by hand (CLOUD_CONTROL)
     sleep_after: float = 0.0  # s at 0 W before an idle inverter may sleep; 0 = off
     integration_version: str = "?"  # from the integration loader at setup (not read from manifest.json in the event loop)
     ready_hours: list[tuple[float, float]] = []  # the discharger is kept awake only in these hours; [] = always
     jump_ref: int = 0  # W: deviation from the target at the start of the last cycle (jump detection)
     jump_pending: bool = False  # a jump came in while a cycle ran: the next P1 value starts a cycle
+    _manual_last: int | None = None  # 1.6.9: the manual power of the last cycle (None outside manual mode)
+    _manual_steady: bool = False  # the manual power did not change since the last cycle: keep the shares (MANUAL_BAND)
     jump_split: int = 0  # W: the jump of this cycle, when it is large enough to start a second inverter (JUMP_SPLIT_W)
     jump_total: int = 0
     solar_sensor: str = ""  # CONF_SOLAR_FORECAST
@@ -237,6 +243,14 @@ class ZendureManager(DataUpdateCoordinator[None], EntityDevice):
         # P1 target (W): 0 = zero at the meter; < 0 a band of a little export, > 0 of a little import (see p1_band)
         self.p1Target = ZendureRestoreNumber(self, "p1_target", self.update_p1_target, None, "W", "power", TARGET_MAX, -TARGET_MAX, NumberMode.BOX, True)
         self.p1Target._attr_native_step = TARGET_STEP  # noqa: SLF001
+        # 1.6.9: the changing clouds mode by hand (auto / on / off), and its P1 target (the export margin while charging,
+        # before 1.6.9 the option "export_bias"; its value is the start value of the new entity)
+        self.export_bias = max(0, int(self.config_entry.data.get(CONF_EXPORT_BIAS, CONTROL_DEFAULTS[CONF_EXPORT_BIAS])))
+        self.p1TargetClouds = ZendureRestoreNumber(
+            self, "p1_target_clouds", self.update_p1_target_clouds, None, "W", "power", 0, -CLOUD_TARGET_MAX, NumberMode.BOX, True, default=-self.export_bias
+        )
+        self.p1TargetClouds._attr_native_step = CLOUD_TARGET_STEP  # noqa: SLF001
+        self.cloudControl = ZendureRestoreSelect(self, "cloud_control", dict(enumerate(CLOUD_CONTROL)), self.update_cloud_control)
         self.availableKwh = ZendureSensor(self, "available_kwh", None, "kWh", "energy_storage", None, 1)
         self.totalKwh = ZendureSensor(self, "total_kwh", None, "kWh", "energy_storage", "measurement", 2)
         self.power = ZendureSensor(self, "power", None, "W", "power", "measurement", 0)
@@ -489,6 +503,47 @@ class ZendureManager(DataUpdateCoordinator[None], EntityDevice):
             _LOGGER.info("P1 target %s W (was %s W)", target, self.p1_target)
         self.p1_target = target
 
+    async def update_p1_target_clouds(self, _entity: ZendureRestoreNumber, value: Any) -> None:
+        """A new P1 target during changing clouds (W, 0 or negative: the export margin while charging)."""
+        try:
+            target = int(round(float(value) / CLOUD_TARGET_STEP) * CLOUD_TARGET_STEP)
+        except (TypeError, ValueError):
+            return
+        margin = max(0, min(CLOUD_TARGET_MAX, -target))
+        if margin != self.export_bias:
+            events.emit("target_change", "", **{"from": -self.export_bias, "to": -margin, "target": "clouds"})
+            _LOGGER.info("P1 target during changing clouds %s W (was %s W)", -margin, -self.export_bias)
+        self.export_bias = margin
+
+    async def update_cloud_control(self, _entity: Any, value: Any) -> None:
+        """Auto / on / off for the changing clouds mode (1.6.9). The detection keeps running in all three."""
+        control = CLOUD_CONTROL[value] if isinstance(value, int) and 0 <= value < len(CLOUD_CONTROL) else str(value)
+        if control not in CLOUD_CONTROL:
+            return
+        was = self.cloud_mode
+        self.cloud_control = control
+        _LOGGER.info("Changing clouds mode: %s", control)
+        self._show_cloud_mode(was)
+
+    def _show_cloud_mode(self, was: bool) -> None:
+        """Event and log when the effective changing clouds mode changed; the binary sensor with its source."""
+        volatility = self._volatility()
+        source = "auto" if self.cloud_control == "auto" else "user"
+        if self.cloud_mode != was:
+            events.emit("cloud_on" if self.cloud_mode else "cloud_off", "", source=source, edges=volatility.edges, threshold=volatility.threshold, peak_surplus=volatility.peak_surplus)
+            _LOGGER.info(
+                "Changing clouds mode %s (%s; %s edges of %s W or more in 10 minutes, peak surplus %s W)",
+                "on" if self.cloud_mode else "off",
+                "detected" if source == "auto" else "set by hand",
+                volatility.edges,
+                volatility.threshold,
+                volatility.peak_surplus,
+            )
+        if (sensor := getattr(self, "cloudMode", None)) is not None:
+            sensor._attr_extra_state_attributes = {"source": source, "detected": volatility.active}  # noqa: SLF001
+            if not sensor.update_value(1 if self.cloud_mode else 0) and sensor.hass is not None and sensor.hass.loop.is_running():
+                sensor.schedule_update_ha_state()  # only the attributes changed
+
     def p1_band(self, p1: int) -> int:
         """The P1 value the control works with, for the P1 target band.
 
@@ -669,6 +724,8 @@ class ZendureManager(DataUpdateCoordinator[None], EntityDevice):
             "fuse_groups": [{"name": fg.name, "devices": [d.name for d in fg.devices]} for fg in getattr(self, "fuseGroups", [])],
             "settings": settings,
             "defaults": {k: v for k, v in CONTROL_DEFAULTS.items() if k not in settings},
+            # 1.6.9: configuration entities of the manager (export_bias in settings is only the start value)
+            "entities": {"p1_target": self.p1_target, "p1_target_clouds": -self.export_bias, "cloud_control": self.cloud_control},
         }
 
     def _p1_record_done(self) -> None:
@@ -807,12 +864,12 @@ class ZendureManager(DataUpdateCoordinator[None], EntityDevice):
         last_command = max((getattr(d, "command_time", float("-inf")) for d in self.devices), default=float("-inf"))
         busy = any(getattr(d, "dir_change", None) is not None or d.slew.pending for d in self.devices)
         if p1 > 0:
-            able = [d for d in self.devices if d.state not in (DeviceState.OFFLINE, DeviceState.SOCEMPTY)]
+            able = [d for d in self.devices if d.state not in (DeviceState.OFFLINE, DeviceState.SOCEMPTY) and _has_room(d, True)]
             if self.operation in (ManagerMode.MATCHING_CHARGE, ManagerMode.STORE_SOLAR):
                 # discharging is not allowed: a charging device should stop, otherwise nothing to do
                 able = [d for d in self.devices if d.slew.current < 0]
         else:
-            able = [d for d in self.devices if d.state not in (DeviceState.OFFLINE, DeviceState.SOCFULL)]
+            able = [d for d in self.devices if d.state not in (DeviceState.OFFLINE, DeviceState.SOCFULL) and _has_room(d, False)]
             if self.operation == ManagerMode.MATCHING_DISCHARGE:
                 able = [d for d in self.devices if d.slew.current > 0]
         if abs(p1) <= SmartMode.STALE_POWER or busy or not able or (self._stale_since is not None and last_command > self._stale_mark):
@@ -853,6 +910,7 @@ class ZendureManager(DataUpdateCoordinator[None], EntityDevice):
                 f"{d.name}: {self._activity(d)} {d.homeOutput.asInt - d.homeInput.asInt} W, command {d.slew.current} W, "
                 f"SoC {d.electricLevel.asInt}%, {d.state.name}, flip released {d.slew.flip_released()}, run since "
                 f"{'-' if d.slew._run_start is None else round(monotonic() - d.slew._run_start)} s"  # noqa: SLF001
+                + (f", BMS cap {d.bms_cap} W" if getattr(d, "bms_cap", 0) else "")
             )
         return "; ".join(parts)
 
@@ -1226,7 +1284,6 @@ class ZendureManager(DataUpdateCoordinator[None], EntityDevice):
         self.role_margin = max(0, int(data.get(CONF_ROLE_MARGIN, CONTROL_DEFAULTS[CONF_ROLE_MARGIN])))
         self.roles.margin = self.role_margin
         self.fill_level = min(100, max(20, int(data.get(CONF_FILL_LEVEL, CONTROL_DEFAULTS[CONF_FILL_LEVEL]))))
-        self.export_bias = max(0, int(data.get(CONF_EXPORT_BIAS, CONTROL_DEFAULTS[CONF_EXPORT_BIAS])))
         SmartMode.JUMP_W = max(0, int(data.get(CONF_JUMP, CONTROL_DEFAULTS[CONF_JUMP])))
         self.solar_sensor = str(data.get(CONF_SOLAR_FORECAST) or "")
         if not self.solar_sensor:
@@ -1303,7 +1360,7 @@ class ZendureManager(DataUpdateCoordinator[None], EntityDevice):
                 if (home := -d.homeInput.asInt + max(0, d.pwr_offgrid)) < -tiny:
                     self.charge.append(d)
                     self.charge_limit += d.fuseGrp.charge_limit(d)
-                    self.charge_optimal += d.charge_optimal
+                    self.charge_optimal += self._optimal(d, False)
                     self.charge_weight += d.pwr_max * (100 - d.electricLevel.asInt)
                     # Credit only the portion of homeInput that reaches the battery; AC
                     # drawn but not stored is real demand on the home bus, not surplus.
@@ -1318,7 +1375,7 @@ class ZendureManager(DataUpdateCoordinator[None], EntityDevice):
                     if d.state == DeviceState.SOCFULL and d.exports_bypass:
                         self.discharge_bypass += min(-d.pwr_produced, home)
                     self.discharge_limit += d.fuseGrp.discharge_limit(d)
-                    self.discharge_optimal += d.discharge_optimal
+                    self.discharge_optimal += self._optimal(d, True)
                     self.discharge_produced -= d.pwr_produced
                     self.discharge_weight += d.pwr_max * d.electricLevel.asInt
                     setpoint += home
@@ -1360,6 +1417,8 @@ class ZendureManager(DataUpdateCoordinator[None], EntityDevice):
 
         # Update power distribution.
         _LOGGER.debug("P1 ======> p1:%s isFast:%s, setpoint:%sW stored:%sW", p1, isFast, setpoint, self.produced)
+        if self.operation != ManagerMode.MANUAL:
+            self._manual_last, self._manual_steady = None, False
         self._update_roles()
         await self._prepare_roles()
         match self.operation:
@@ -1388,7 +1447,13 @@ class ZendureManager(DataUpdateCoordinator[None], EntityDevice):
 
             case ManagerMode.MANUAL:
                 # Manual power into or from home
-                if (setpoint := int(self.manualpower.asNumber)) > 0:
+                setpoint = int(self.manualpower.asNumber)
+                # keep the shares while the manual power is the same and the devices together deliver it within the band
+                delivered = sum(d.homeOutput.asInt - d.homeInput.asInt for d in self.devices if d.state != DeviceState.OFFLINE)
+                band = max(SmartMode.MANUAL_BAND_MIN, abs(setpoint) * SmartMode.MANUAL_BAND_PCT // 100)
+                self._manual_steady = setpoint == self._manual_last and abs(delivered - setpoint) < band
+                self._manual_last = setpoint
+                if setpoint > 0:
                     await self.power_discharge(setpoint, time)
                 else:
                     await self.power_charge(setpoint, time, hysteresis=False)
@@ -1404,6 +1469,12 @@ class ZendureManager(DataUpdateCoordinator[None], EntityDevice):
 
     @property
     def cloud_mode(self) -> bool:
+        """The changing clouds mode in effect: detected (auto), or set by hand (1.6.9)."""
+        control = getattr(self, "cloud_control", "auto")
+        if control == "on":
+            return True
+        if control == "off":
+            return False
         return self._volatility().active
 
     def _cloud_adjust(self, setpoint: int, time: datetime) -> int:
@@ -1414,19 +1485,11 @@ class ZendureManager(DataUpdateCoordinator[None], EntityDevice):
         """
         self.measured_setpoint = setpoint  # without the export margin: used for decisions about devices
         volatility = self._volatility()
-        was = volatility.active
+        was = self.cloud_mode
         volatility.add(time.timestamp(), setpoint)
-        if volatility.active != was:
-            events.emit("cloud_on" if volatility.active else "cloud_off", "", edges=volatility.edges, threshold=volatility.threshold, peak_surplus=volatility.peak_surplus)
-            _LOGGER.info(
-                "Changing clouds mode %s (%s edges of %s W or more in 10 minutes, peak surplus %s W)",
-                "on" if volatility.active else "off",
-                volatility.edges,
-                volatility.threshold,
-                volatility.peak_surplus,
-            )
-        if (sensor := getattr(self, "cloudMode", None)) is not None:
-            sensor.update_value(1 if self.cloud_mode else 0)
+        shown = getattr(getattr(self, "cloudMode", None), "_attr_extra_state_attributes", None) or {}
+        if self.cloud_mode != was or shown.get("detected") != volatility.active:
+            self._show_cloud_mode(was)
         if self.operation not in (ManagerMode.MATCHING, ManagerMode.MATCHING_CHARGE, ManagerMode.MATCHING_DISCHARGE, ManagerMode.STORE_SOLAR):
             return setpoint
         adjusted = setpoint
@@ -1483,7 +1546,7 @@ class ZendureManager(DataUpdateCoordinator[None], EntityDevice):
         self.p1tracker.history.append(p1)
         self.jump_total += 1
         since = round((time - last).total_seconds(), 1) if last is not None else None
-        events.emit("p1_jump", "", p1=p1, growth=growth, since_cycle=since)
+        events.emit("p1_jump", "", p1=p1, growth=growth, since_cycle=since, direction="import" if self.p1_band(p1) > 0 else "export")
         return True
 
     def followup_needed(self, _p1: int) -> bool:
@@ -1535,7 +1598,8 @@ class ZendureManager(DataUpdateCoordinator[None], EntityDevice):
             return
 
         def limit(d: Any) -> int:
-            return abs(d.discharge_limit if direction > 0 else d.charge_limit)
+            capped = getattr(d, "capped_limit", None)  # 1.6.9: within a BMS cap
+            return abs(capped(direction > 0) if capped is not None else d.discharge_limit if direction > 0 else d.charge_limit)
 
         # share the correction by the room each device has in that direction
         grow = error * direction > 0  # the magnitude of the power goes up
@@ -1727,6 +1791,32 @@ class ZendureManager(DataUpdateCoordinator[None], EntityDevice):
         if not sensor.update_value(len(devices)) and changed and hass and hass.loop.is_running():
             sensor.schedule_update_ha_state()
 
+    @staticmethod
+    def _optimal(d: Any, discharge: bool) -> int:
+        """The optimal power of a device (a quarter of its limit), within a BMS cap (1.6.9)."""
+        optimal = d.discharge_optimal if discharge else d.charge_optimal
+        limited = getattr(d, "bms_limited", None)
+        if limited is not None and limited(discharge):
+            capped = d.capped_limit(discharge) // 4
+            return min(optimal, capped) if discharge else max(optimal, capped)
+        return optimal
+
+    def _manual_power(self, d: Any, pwr: int) -> int:
+        """Manual mode (1.6.9): a running device keeps its power while its new share differs less than the band.
+
+        The manual power is shared by SoC, and the shares moved a little every cycle (15 November: 183 commands an
+        hour at a fixed 6600 W, 20-50 W per device). The band is MANUAL_BAND_PCT % of the manual power (at least
+        MANUAL_BAND_MIN W). A new manual power, a stop and a start are applied at once; a device that stops (full)
+        changes the shares of the others by more than the band.
+        """
+        if not self._manual_steady or pwr == 0 or getattr(self, "operation", None) != ManagerMode.MANUAL:
+            return pwr
+        current = d.slew.current
+        if abs(current) < ZERO_BAND or current * pwr < 0:
+            return pwr
+        band = max(SmartMode.MANUAL_BAND_MIN, abs(self._manual_last or 0) * SmartMode.MANUAL_BAND_PCT // 100)
+        return current if abs(pwr - current) < band else pwr
+
     def _release_charger(self, device: ZendureDevice, demand: int, time: datetime) -> bool:
         """True when the other charging devices can carry the load, so this device can go back to standby."""
         return self._release("charge_release_since", len(self.charge), device, demand, time)
@@ -1914,6 +2004,7 @@ class ZendureManager(DataUpdateCoordinator[None], EntityDevice):
             # kept ready to discharge) is released as soon as the others can carry the load, so it can react to a peak
             if len(self.charge) > 1 and i == 0 and self._release_charger(d, demand, time):
                 pwr = 0
+            pwr = self._manual_power(d, pwr)
 
             self._use(d, used, pwr)
             setpoint -= await d.power_charge(pwr)
@@ -2014,6 +2105,7 @@ class ZendureManager(DataUpdateCoordinator[None], EntityDevice):
             # kept ready to charge) is released as soon as the others can carry the load again
             if len(self.discharge) > 1 and i == 0 and d.state != DeviceState.SOCFULL and self._release_discharger(d, served, time):
                 pwr = 0
+            pwr = self._manual_power(d, pwr)
 
             self._use(d, used, pwr)
             setpoint -= await d.power_discharge(pwr)
@@ -2045,6 +2137,21 @@ class ZendureManager(DataUpdateCoordinator[None], EntityDevice):
             # all new devices are started at the same time
             await asyncio.gather(*starts)
             self.pwr_low: int = 0
+
+
+def _has_room(d: Any, discharge: bool) -> bool:
+    """True when the device can still give more power in this direction (1.6.9, stale control watchdog).
+
+    A device at its limit (or at the cap of its BMS) cannot do more: with all devices there, import or export is
+    no lack of control (16 November 17:39: three inverters at 2400 / 2200 / 2200 W and 892 W import).
+    """
+    capped = getattr(d, "capped_limit", None)
+    limit = capped(discharge) if capped is not None else getattr(d, "discharge_limit" if discharge else "charge_limit", None)
+    if not isinstance(limit, int) or limit == 0:
+        return True  # unknown limit: assume it can
+    current = d.slew.current
+    room = limit - current if discharge else current - limit
+    return room >= SmartMode.POWER_START
 
 
 def await_chain(task: asyncio.Task) -> str:

@@ -9,7 +9,7 @@ All settings are under *Settings → Devices & services → Zendure HA-GP013 →
 | Account / token | Zendure app token |
 | MQTT & Wi-Fi | Cloud or local MQTT broker |
 | P1 meter | P1 sensor and, optionally, the HomeWizard P1 meter that is read every second |
-| Power control | Control cycle, start power, tolerance, manual interval, peak limit, export margin during changing clouds, peak detection |
+| Power control | Control cycle, start power, tolerance, manual interval, peak limit, peak detection |
 | Direction change | Delay before a change of direction, minimum run time |
 | Multiple inverters | Spread threshold, role switch margin, safe state in flash, sleep when idle, ready hours of the discharger |
 | Solar forecast | Sensor with the solar forecast of today (optional) |
@@ -20,14 +20,24 @@ All settings are under *Settings → Devices & services → Zendure HA-GP013 →
 
 - **Smart matching** keeps the grid connection around 0 W. Between two control cycles, inverters that already run in the right direction are adjusted on every P1 update, without switching relays.
 - **Peaks at once.** When import or export grew by 400 W or more since the last cycle, the next cycle starts at once. A load that builds up is seen at the first 400 W. The response of the batteries never counts as a jump. Threshold: *Power control* (0 = off).
-- **Changing clouds** are detected from the P1 meter (without the batteries), with a threshold that follows the sun. While they last, charging aims at a small export, charging resumes after 10 s instead of 60 s, a short small shortage does not start an inverter, and one inverter stays ready to discharge.
+- **Changing clouds** are detected from the P1 meter (without the batteries), with a threshold that follows the sun. The mode can also be set by hand (1.6.9, see below). While it lasts, charging aims at a small export (*P1 target (clouds)*), charging resumes after 10 s instead of 60 s, a short small shortage does not start an inverter, and one inverter stays ready to discharge.
 - **Spread threshold.** As few inverters as needed (e.g. 3000 W on 2, 1500 W on 1). Above the threshold one more inverter is added, below it the power is merged back.
 - **Roles.** One inverter is ready to charge, one to discharge; the one with the highest SoC covers peaks. Roles swap only after a clear SoC difference and a hold time.
 - **Easy on the hardware.** Power commands go to RAM (smartMode 1); a safe 0 W state is stored in flash at most once per hour. A change of direction always passes a confirmed 0 W and a mode-switch pause; inverters have a minimum run time; fuse group limits apply when a device starts. zenSDK requests are serialized with back-off and calm polling when idle, in manual mode and when off.
 - **Sleep when idle.** After 10 minutes at 0 W (adjustable, 0 = off) an idle inverter goes to sleep (≈30 W → 5 W). The discharger stays awake, optionally only in set hours (e.g. 7-9, 12-13, 17-19).
+- **Battery limits (1.6.9).** When the battery (BMS) of an inverter gives clearly less than its command for 30 s, for example a charge that tapers near full or a cold battery, the manager plans with what it really gives: the rest goes to the other inverters, and the inverter gets at most its cap + 100 W, a new command only when the cap moves 100 W. When it gives that extra 100 W for 10 s, the cap ends.
+- **Calm manual mode (1.6.9).** The manual power is shared out again only when an inverter's share would change by more than 5 % of the manual power (at least 50 W), or when the inverters together are more than that off. A new manual power, a start and a stop go through at once.
 - **Safe without P1.** No P1 value for a minute: a Repairs issue, the batteries keep their power. After 5 minutes they fall back to the base load of the last 10 minutes (only ever less).
 - **A second controller is noticed.** When something else changes the limits (Zendure app energy plan, another integration), a Repairs issue names the inverters.
 - **Devices at new addresses** are found again: fixed IP per device, mDNS by the device's own report, automatic update of a manual address that no longer answers, and a network search when mDNS does not work.
+
+## Changing clouds mode and P1 target (clouds)
+
+*Zendure Manager → Configuration* (1.6.9):
+
+- **Changing clouds mode control**: *Auto* (default, the manager detects it), *On* or *Off*. With *On* or *Off* the manager does not switch the mode until you set *Auto* again; the detection keeps running. The binary sensor *Changing clouds mode* shows the mode in effect, with the attributes `source` (`auto` / `user`) and `detected`.
+- *On* switches everything the mode does: the export margin below, charging resumes after 10 s instead of 60 s, a shortage below 150 W does not start an inverter, the spread threshold is 70 %, and one inverter stays ready to discharge.
+- **P1 target (clouds)**: 0 to −500 W, steps of 10 W, default −100 W. The export the control aims at while charging in the changing clouds mode. Before 1.6.9 this was the option *Export margin* in *Power control*; its value is the start value. It is at most the recent peak surplus of the sun, and 0 on a day the solar forecast says the batteries will not be full. With a negative P1 target (band) the larger export counts; they do not add up.
 
 ## P1 target (band)
 

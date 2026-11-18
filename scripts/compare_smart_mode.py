@@ -779,6 +779,9 @@ async def main() -> None:
         _dispatch.VOLATILE_OFF_EDGES = int(os.environ["CLOUD_OFF"])
     if NEW and os.environ.get("ROLE_MARGIN"):
         m.roles.margin = m.role_margin = int(os.environ["ROLE_MARGIN"])
+    for key, value in os.environ.items():  # SM_<NAME>=<value> sets SmartMode.<NAME> (1.6.9), e.g. SM_POWER_TOLERANCE=15
+        if key.startswith("SM_") and hasattr(SmartMode, key[3:]):
+            setattr(SmartMode, key[3:], type(getattr(SmartMode, key[3:]))(float(value)))
     if os.environ.get("TIMEZERO"):
         SmartMode.TIMEZERO = float(os.environ["TIMEZERO"])
     if os.environ.get("TIMEFAST"):

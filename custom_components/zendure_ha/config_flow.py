@@ -18,7 +18,6 @@ from .const import (
     CONF_APPTOKEN,
     CONF_AUTO_MQTT_USER,
     CONF_DEVICE_IPS,
-    CONF_EXPORT_BIAS,
     CONF_JUMP,
     CONF_FILL_LEVEL,
     CONF_FLASH_SAFE,
@@ -476,7 +475,6 @@ class ZendureOptionsFlowHandler(OptionsFlow):
                 vol.Required(CONF_POWER_TOLERANCE): self._number(0, 100, 1, "W"),
                 vol.Required(CONF_MANUAL_INTERVAL): self._number(4, 300, 1, "s"),
                 vol.Required(CONF_PEAK_LIMIT): self._number(0, 20000, 50, "W"),
-                vol.Required(CONF_EXPORT_BIAS): self._number(0, 500, 10, "W"),
                 vol.Required(CONF_JUMP): self._number(0, 3000, 50, "W"),
             }
         )

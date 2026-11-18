@@ -111,6 +111,9 @@
       },
       "p1_target": {
         "name": "Cible P1 (bande)"
+      },
+      "p1_target_clouds": {
+        "name": "Cible P1 (nuages)"
       }
     },
     "sensor": {
@@ -633,6 +636,14 @@
           "normal": "Normal",
           "fast": "Vite"
         }
+      },
+      "cloud_control": {
+        "name": "Commande du mode nuages changeants",
+        "state": {
+          "auto": "Auto (détecté)",
+          "on": "Activé",
+          "off": "Désactivé"
+        }
       }
     },
     "switch": {
@@ -725,7 +736,6 @@
           "power_tolerance": "Tolérance de puissance de l'appareil (W)",
           "manual_interval": "Intervalle de mise à jour en mode manuel (s)",
           "peak_limit": "Limite d'écrêtage des pics (W, 0 = désactivé)",
-          "export_bias": "Marge d'injection pendant la charge par nuages changeants (W, 0 = désactivé)",
           "jump_w": "Détection de pics : saut P1 qui lance un cycle immédiatement (W, 0 = désactivé)"
         },
         "data_description": {

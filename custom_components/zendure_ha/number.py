@@ -134,22 +134,23 @@ class ZendureRestoreNumber(ZendureNumber, RestoreEntity):
         minimum: int = 0,
         mode: NumberMode = NumberMode.AUTO,
         doupdate: bool = False,
+        default: int = 0,
     ) -> None:
-        """Initialize a number entity."""
+        """Initialize a number entity. ``default`` is the value without a restored state (a new entity)."""
         # Set the default *before* super().__init__(): ZendureNumber.__init__
         # registers the entity via self.add(), which HA runs as an eager task.
         # async_added_to_hass (and the restore below) can therefore complete
         # before super().__init__() returns, and an assignment after it would
         # silently overwrite the restored value (upstream #1549/#1764).
-        self._attr_native_value = 0
+        self._attr_native_value = self._default = default
         super().__init__(device, uniqueid, onwrite, template, uom, deviceclass, maximum, minimum, mode, 1, doupdate)
 
     async def async_added_to_hass(self) -> None:
         """Handle entity which will be added."""
         await super().async_added_to_hass()
         if state := await self.async_get_last_state():
-            if state.state is None or state.state == "unknown":
-                self._attr_native_value = 0
+            if state.state is None or state.state in ("unknown", "unavailable"):
+                self._attr_native_value = self._default
                 return
             self._attr_native_value = int(float(state.state))
             if self._onwrite is not None:

@@ -111,6 +111,9 @@
       },
       "p1_target": {
         "name": "P1 target (band)"
+      },
+      "p1_target_clouds": {
+        "name": "P1 target (clouds)"
       }
     },
     "sensor": {
@@ -633,6 +636,14 @@
           "normal": "Normal",
           "fast": "Fast"
         }
+      },
+      "cloud_control": {
+        "name": "Changing clouds mode control",
+        "state": {
+          "auto": "Auto (detected)",
+          "on": "On",
+          "off": "Off"
+        }
       }
     },
     "switch": {
@@ -725,7 +736,6 @@
           "power_tolerance": "Device power tolerance (W)",
           "manual_interval": "Update interval in manual mode (s)",
           "peak_limit": "Peak shaving limit (W, 0 = off)",
-          "export_bias": "Export margin while charging during changing clouds (W, 0 = off)",
           "jump_w": "Peak detection: P1 jump that starts a cycle at once (W, 0 = off)"
         },
         "data_description": {

@@ -35,3 +35,9 @@ The simulation reads [recordings](recording.md) in both formats, also `.csv.gz`.
 ```
 SCENARIO=file P1FILE=p1_2026-11-02.csv FROM=10:00 TO=16:00 python scripts/compare_smart_mode.py . 1.5.7 out.json
 ```
+
+Any `SmartMode` constant can be set with `SM_<NAME>=<value>` (1.6.9), e.g. a tolerance and release sweep on a recorded evening with the measured inverter model and 5.28 kWh batteries:
+
+```
+SM_POWER_TOLERANCE=15 SM_RELEASE_LOOKBACK=90 SCENARIO=file P1FILE=p1_2026-11-16.csv FROM=15:00 CAPACITY=5280 LATENCY=1.5 RAMP_W=250 REPORT_S=3 python scripts/compare_smart_mode.py . 1.6.9 out.json
+```

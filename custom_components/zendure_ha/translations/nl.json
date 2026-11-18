@@ -111,6 +111,9 @@
       },
       "p1_target": {
         "name": "P1-doel (band)"
+      },
+      "p1_target_clouds": {
+        "name": "P1-doel (wolken)"
       }
     },
     "sensor": {
@@ -633,6 +636,14 @@
           "normal": "Normaal",
           "fast": "Snel"
         }
+      },
+      "cloud_control": {
+        "name": "Wolkenmodus (wisselvallig) bediening",
+        "state": {
+          "auto": "Automatisch (gedetecteerd)",
+          "on": "Aan",
+          "off": "Uit"
+        }
       }
     },
     "switch": {
@@ -725,7 +736,6 @@
           "power_tolerance": "Vermogenstolerantie apparaat (W)",
           "manual_interval": "Updateinterval in handmatige modus (s)",
           "peak_limit": "Piekbegrenzing (W, 0 = uit)",
-          "export_bias": "Exportmarge tijdens laden bij wisselende bewolking (W, 0 = uit)",
           "jump_w": "Piekdetectie: P1-sprong die direct een cyclus start (W, 0 = uit)"
         },
         "data_description": {

@@ -111,6 +111,9 @@
       },
       "p1_target": {
         "name": "P1-Ziel (Band)"
+      },
+      "p1_target_clouds": {
+        "name": "P1-Ziel (Wolken)"
       }
     },
     "sensor": {
@@ -633,6 +636,14 @@
           "normal": "Normal",
           "fast": "Schnell"
         }
+      },
+      "cloud_control": {
+        "name": "Steuerung Modus wechselnde Bewölkung",
+        "state": {
+          "auto": "Automatisch (erkannt)",
+          "on": "Ein",
+          "off": "Aus"
+        }
       }
     },
     "switch": {
@@ -725,7 +736,6 @@
           "power_tolerance": "Leistungstoleranz des Geräts (W)",
           "manual_interval": "Aktualisierungsintervall im manuellen Modus (s)",
           "peak_limit": "Spitzenkappung (W, 0 = aus)",
-          "export_bias": "Exportreserve beim Laden bei wechselnder Bewölkung (W, 0 = aus)",
           "jump_w": "Spitzenerkennung: P1-Sprung, der sofort einen Zyklus startet (W, 0 = aus)"
         },
         "data_description": {
