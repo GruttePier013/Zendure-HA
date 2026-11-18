@@ -38,6 +38,9 @@ TYPES = (
     "p1_stale",  # no P1 value for P1_STALE_WARN s
     "p1_back",  # P1 values arrive again
     "p1_fallback",  # without P1 values the batteries fall back to the base load
+    "p1_jump",  # P1 jumped: a cycle at once (direction=import or export, 1.6.9)
+    "bms_limit",  # the BMS of a device gives less than the command: it gets a cap (1.6.9)
+    "bms_limit_end",  # the cap ended: the BMS gives more again, or the device stopped (1.6.9)
 )
 
 DIR_SLOW = 15.0  # s: a change of direction that takes longer is logged as a warning

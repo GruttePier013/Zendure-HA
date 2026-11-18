@@ -58,12 +58,14 @@
 | `role_change` | A role moved to another device |
 | `stop_abrupt` | Power fell more than 800 W between two cycles with the same command |
 | `stale_control` | The watchdog fired |
+| `p1_jump` | P1 jumped by more than the peak detection: a control cycle at once; `direction=import` (a load switched on) or `export` (a load switched off while discharging, or the sun came out) |
+| `bms_limit`, `bms_limit_end` | The battery (BMS) of a device gives at least 150 W (or 10 %) less than a command of 300 W or more for 30 s, for example a charge that tapers near full: the device gets a cap; the cap ends when the device gives the cap + 100 W for 10 s, or stops |
 | `target_change` | The P1 target changed |
 
 **File sizes:** with three devices a day at 1 s is about 14 MB (about 5 MB without the control state). Earlier days are compressed (`.csv.gz`, about one fifth); the folder is kept below 200 MB, oldest first. When the format or number of devices changes during the day, recording continues in `p1_<date>_2.csv`.
 
 ## Watchdog
 
-In the smart modes the watchdog fires when more than 300 W is imported or exported for 10 s while nothing happens: no new command, no change of direction running, no command held back, and a device could still act. It then logs a WARNING with the control state and forces one control cycle. When the charge delay explains the situation, only an event is written.
+In the smart modes the watchdog fires when more than 300 W is imported or exported for 10 s while nothing happens: no new command, no change of direction running, no command held back, and a device could still act (1.6.9: a device at its limit or at its BMS cap cannot). It then logs a WARNING with the control state and forces one control cycle. When the charge delay explains the situation, only an event is written.
 
 Recordings can be replayed in the [simulation](simulation.md#replaying-a-recording).

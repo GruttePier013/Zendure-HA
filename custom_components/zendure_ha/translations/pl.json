@@ -111,6 +111,9 @@
       },
       "p1_target": {
         "name": "Cel P1 (pasmo)"
+      },
+      "p1_target_clouds": {
+        "name": "Cel P1 (chmury)"
       }
     },
     "sensor": {
@@ -633,6 +636,14 @@
           "normal": "Normalna",
           "fast": "Szybka"
         }
+      },
+      "cloud_control": {
+        "name": "Sterowanie trybem zmiennego zachmurzenia",
+        "state": {
+          "auto": "Automatycznie (wykryty)",
+          "on": "Włączony",
+          "off": "Wyłączony"
+        }
       }
     },
     "switch": {
@@ -725,7 +736,6 @@
           "power_tolerance": "Tolerancja mocy urządzenia (W)",
           "manual_interval": "Interwał aktualizacji w trybie ręcznym (s)",
           "peak_limit": "Limit redukcji szczytów (W, 0 = wyłączony)",
-          "export_bias": "Margines eksportu podczas ładowania przy zmiennym zachmurzeniu (W, 0 = wyłączony)",
           "jump_w": "Wykrywanie szczytów: skok P1, który od razu uruchamia cykl (W, 0 = wył.)"
         },
         "data_description": {

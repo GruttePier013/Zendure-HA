@@ -6,6 +6,29 @@ Zendure HA-GP013 started from [Zendure-HA](https://github.com/Zendure/Zendure-HA
 
 Effects in brackets come from the simulation (`scripts/compare_smart_mode.py`, three SolarFlow 2400 AC+ with measured ramp, latency and losses), not from measurements in a house.
 
+## [1.6.9] - 2026-11-18
+
+From the recordings of 13, 15 and 16 November (smart, manual and charge mode; 1.6.6 and 1.6.8).
+
+### Changed
+- **Power tolerance 15 W by default (was 5 W).** A device gets a new command only when it differs more than this from the measured power. At steady power the inverters follow their command within about ±5 W, so 5 W chased noise: on 16 November (a new installation with the default) 29 % of the commands changed less than 15 W, 949 commands an hour against about 390 on 13 and 15 November with 15 W. Replayed (13, 15, 16 November evenings): 20-30 % fewer commands, +9 to +14 Wh |P1| per evening. A saved value stays as it is.
+- **Calm manual mode.** The manual power is shared by SoC, and the shares moved every cycle: 15 November 10:00-12:15, a fixed 6600 W charge, gave 183 commands an hour with steps of 20-50 W per device. Now a running device keeps its power while its new share differs less than 5 % of the manual power (at least 50 W) and the devices together deliver the manual power within that band. A new manual power, a start and a stop go through at once.
+- The `p1_jump` event tells its `direction` (`import` / `export`). Jumps for a falling load already existed (83 of 211 jumps on 13-16 November were export); `p1_jump`, `bms_limit` and `bms_limit_end` are now listed as event types.
+
+### Added
+- **Changing clouds mode by hand.** The select *Changing clouds mode control* (Configuration of the Zendure Manager): *Auto* (detected, as before), *On*, *Off*. *On* / *Off* hold until *Auto* is chosen again; the detection keeps running. The binary sensor shows the mode in effect with the attributes `source` and `detected`; `cloud_on` / `cloud_off` events tell their `source`.
+- **P1 target (clouds)** (Configuration, 0 to −500 W): the export margin while charging in the changing clouds mode, before the option *Export margin* in *Power control*. That option is gone from the menu; its saved value is the start value of the entity. The limits stay: at most the recent peak surplus, 0 when the batteries will not be full today. The meta file of a recording lists both P1 targets and the select under `entities`.
+- **Battery (BMS) limit of a device.** When a device gives at least 150 W (or 10 %) less than a command of 300 W or more for 30 s, its measured power becomes its cap (event `bms_limit`). The manager plans with the cap: the fuse group limit, the optimal power and the start of another device use it, so the rest goes to the other devices. The device gets at most its cap + 100 W and a new command only when that changes by 100 W. The cap follows the BMS; it ends when the device gives the cap + 100 W for 10 s, reaches its limit or stops (`bms_limit_end`). 15 November 11:25-12:04 (full charge, taper from 85 % SoC) replayed: 12 cap events; no cap on 13, 15 (smart) and 16 November.
+
+### Fixed
+- **Stale control watchdog at the limit.** A device at its limit (or its BMS cap) no longer counts as "could still act". 16 November 17:39: three inverters at 2400 / 2200 / 2200 W, 892 W import, gave a WARNING and a forced cycle for nothing.
+
+### Documentation
+- README: what is new, and a visual overview of the Zendure Manager entities and all options (defaults, what they do, tips), with a diagram of the changing clouds mode control.
+
+### Simulation
+- `SM_<NAME>=<value>` sets any `SmartMode` constant, e.g. `SM_POWER_TOLERANCE=15`, `SM_RELEASE_LOOKBACK=90`.
+
 ## [1.6.8] - 2026-11-16
 
 Taken over from Zendure-HA up to 1.4.6.

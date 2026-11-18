@@ -829,9 +829,99 @@ class ZendureDevice(EntityDevice):
             self.slew.sync(measured)
             self.slew.measure(measured)
             await self._follow_battery_limit(measured)
+        self._watch_bms(measured)
         self._check_events(measured)
 
         return self.state != DeviceState.OFFLINE
+
+    # ------------------------------------------------------------------------------------------
+    # 1.6.9: the battery management system (BMS) limits the power below the command
+    # ------------------------------------------------------------------------------------------
+    bms_cap: int = 0  # W (positive): the BMS lets the device do no more than this in direction bms_dir; 0 = no cap
+    bms_dir: int = 0  # 1 = discharge, -1 = charge
+    _bms_since: float | None = None
+    _last_sent: int | None = None  # the last power that was really sent to the device
+
+    def _watch_bms(self, measured: int) -> None:
+        """Recognise a device whose BMS gives less power than the command, and how much it gives.
+
+        On 15 November a full charge (3 x 2200 W) tapered from 85 % SoC: the measured power fell to a few hundred W
+        while the command stayed at 2200-2400 W, and the manager kept moving power between the devices for nothing.
+        When the measured power stays more than BMS_GAP_W (or BMS_GAP_PCT %) below a command of at least BMS_MIN_W
+        for BMS_AFTER s, the measured power is the cap of this device: the manager plans with it (the rest goes to
+        the other devices) and the device gets at most the cap + BMS_PROBE_W. When it gives clearly more than the cap,
+        the BMS allows more again and the cap ends (it comes back after BMS_AFTER s when it is still needed).
+        """
+        cmd = self.slew.current
+        if self._last_sent is not None and self._last_sent * cmd > 0:
+            cmd = self._last_sent  # what the device was really told (a capped device keeps its command within the band)
+        direction = (cmd >= ZERO_BAND) - (cmd <= -ZERO_BAND)
+        if direction == 0 or self.state == DeviceState.OFFLINE or self.pwr_offgrid != 0 or measured * direction <= 0:
+            self._bms_end("stopped")
+            self._bms_since = None
+            return
+        last_report = getattr(self, "mqtt_last", None)
+        if last_report is not None and monotonic() - last_report > SmartMode.BMS_REPORT_AGE:
+            self._bms_since = None  # no fresh report (network trouble): the measured power may be old
+            return
+        magnitude, wanted = abs(measured), abs(cmd)
+        short = wanted >= SmartMode.BMS_MIN_W and wanted - magnitude > max(SmartMode.BMS_GAP_W, wanted * SmartMode.BMS_GAP_PCT / 100)
+        if self.bms_cap and self.bms_dir == direction:
+            limit = abs(self.discharge_limit if direction > 0 else self.charge_limit)
+            if limit and magnitude >= limit - SmartMode.BMS_GAP_W:
+                self._bms_end("released")
+            elif magnitude >= wanted - SmartMode.BMS_FOLLOW_W:
+                # it gives what it was told; when that is (about) the probe above the cap, the BMS may allow more
+                if wanted >= self.bms_cap + SmartMode.BMS_PROBE_W // 2:
+                    now = monotonic()
+                    if self._bms_since is None:
+                        self._bms_since = now
+                    elif now - self._bms_since >= SmartMode.BMS_RELEASE:
+                        self._bms_end("released")
+                        self._bms_since = None
+            else:
+                self._bms_since = None
+                if wanted >= self.bms_cap:
+                    self.bms_cap = magnitude  # the BMS gives less than the command: its power is the cap (it moves by 50-100 W)
+            return
+        self._bms_end("direction")
+        if not short:
+            self._bms_since = None
+            return
+        now = monotonic()
+        if self._bms_since is None:
+            self._bms_since = now
+            return
+        if now - self._bms_since < SmartMode.BMS_AFTER:
+            return
+        self.bms_cap, self.bms_dir = magnitude, direction
+        self._bms_since = None
+        _LOGGER.info("%s: the battery limits the %s power to %s W (command %s W, SoC %s %%)", self.name, _dir_name(direction), magnitude, cmd, self.electricLevel.asInt)
+        events.emit("bms_limit", self.name, direction=_dir_name(direction), cap=magnitude, command=cmd, soc=self.electricLevel.asInt)
+
+    def _bms_end(self, reason: str) -> None:
+        if not self.bms_cap:
+            return
+        events.emit("bms_limit_end", self.name, direction=_dir_name(self.bms_dir), cap=self.bms_cap, reason=reason, soc=self.electricLevel.asInt)
+        self.bms_cap = self.bms_dir = 0
+
+    def bms_limited(self, discharge: bool) -> bool:
+        """True when the BMS caps the power of this device in this direction."""
+        return bool(self.bms_cap) and self.bms_dir == (1 if discharge else -1)
+
+    def capped_limit(self, discharge: bool) -> int:
+        """The discharge limit (positive) or charge limit (negative) of the device, within a BMS cap (+ probe)."""
+        limit = self.discharge_limit if discharge else self.charge_limit
+        if not self.bms_limited(discharge):
+            return limit
+        cap = self.bms_cap + SmartMode.BMS_PROBE_W
+        return min(limit, cap) if discharge else max(limit, -cap)
+
+    def _bms_hold(self, power: int) -> bool:
+        """A capped device keeps its last command while the new one differs less than BMS_RESEND_W (no churn)."""
+        if not self.bms_limited(power > 0) or self._last_sent is None or self._last_sent * power <= 0:
+            return False
+        return abs(power - self._last_sent) < SmartMode.BMS_RESEND_W
 
     async def _follow_battery_limit(self, measured: int) -> None:
         """A full battery stops charging (an empty one stops discharging) on its own, whatever the command says.
@@ -857,7 +947,7 @@ class ZendureDevice(EntityDevice):
 
     async def power_charge(self, power: int) -> int:
         """Set charge power (negative value); a change of direction passes through 0 W first."""
-        target = min(0, max(power, self.charge_limit))
+        target = min(0, max(power, self.capped_limit(False)))
         power = self.slew.limit(target)
         self._track_direction(target)
         if power > 0:
@@ -869,9 +959,10 @@ class ZendureDevice(EntityDevice):
     async def _apply_charge(self, power: int) -> int:
         """power is here a negative value, but homeInput and homeOutput are always positive"""
         self.commandPower.update_value(power)
-        if abs(power + self.homeInput.asInt - self.homeOutput.asInt) <= SmartMode.POWER_TOLERANCE:
+        if abs(power + self.homeInput.asInt - self.homeOutput.asInt) <= SmartMode.POWER_TOLERANCE or self._bms_hold(power):
             _LOGGER.debug("Power charge %s => no action [power %s]", self.name, power)
             return -self.homeInput.asInt
+        self._last_sent = power
         self.command_total += 1
         self.command_time = monotonic()
         self.commandCount.update_value(self.command_total)
@@ -885,7 +976,7 @@ class ZendureDevice(EntityDevice):
 
     async def power_discharge(self, power: int) -> int:
         """Set discharge power; a change of direction passes through 0 W first."""
-        target = max(0, min(power, self.discharge_limit))
+        target = max(0, min(power, self.capped_limit(True)))
         power = self.slew.limit(target)
         self._track_direction(target)
         if power < 0:
@@ -896,9 +987,10 @@ class ZendureDevice(EntityDevice):
 
     async def _apply_discharge(self, power: int) -> int:
         self.commandPower.update_value(power)
-        if abs(power - self.homeOutput.asInt + self.homeInput.asInt) <= SmartMode.POWER_TOLERANCE:
+        if abs(power - self.homeOutput.asInt + self.homeInput.asInt) <= SmartMode.POWER_TOLERANCE or self._bms_hold(power):
             _LOGGER.debug("Power discharge %s => no action [power %s]", self.name, power)
             return self.homeOutput.asInt
+        self._last_sent = power
         self.command_total += 1
         self.command_time = monotonic()
         self.commandCount.update_value(self.command_total)

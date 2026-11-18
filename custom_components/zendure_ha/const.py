@@ -137,7 +137,20 @@ class SmartMode:
     RESERVE_DELAY = 10  # s the surplus must stay above RESERVE_RELEASE before the cloud reserve charges too
     RESERVE_KEEP = 85  # % below which the cloud reserve is kept out of charging again (hysteresis)
     CONSOLIDATE_DELAY = 30  # seconds the load must stay low before a surplus charging device is released
-    POWER_TOLERANCE = 5  # Device-level power tolerance (W) before updating
+    POWER_TOLERANCE = 15  # Device-level power tolerance (W) before updating (1.6.9: 15, was 5; see CHANGES)
+    # 1.6.9: the BMS of a device limits its power below the command (a charge that tapers near full, a cold battery)
+    BMS_MIN_W = 300  # W: only a command of at least this much is checked
+    BMS_GAP_W = 150  # W: the measured power is this much (or BMS_GAP_PCT % of the command) below the command ...
+    BMS_GAP_PCT = 10
+    BMS_AFTER = 30.0  # s: ... for this long: the measured power is the cap of the device
+    BMS_PROBE_W = 100  # W: a capped device gets at most its cap + this, so it shows when the BMS allows more again
+    BMS_FOLLOW_W = 30  # W: a capped device that gives its command within this much follows it ...
+    BMS_RELEASE = 10.0  # s: ... for this long at the probe: the BMS allows more, the cap ends
+    BMS_REPORT_AGE = 10.0  # s: an older report is not used for the BMS check
+    BMS_RESEND_W = 100  # W: a capped device only gets a new command when it differs this much from the last one
+    # 1.6.9: manual mode only shares the power out again when a device would change by this much (no churn)
+    MANUAL_BAND_PCT = 5  # % of the manual power ...
+    MANUAL_BAND_MIN = 50  # W: ... but at least this much
 
 
 class Flash:
@@ -179,7 +192,7 @@ CONTROL_DEFAULTS = {
     CONF_TIMEFAST: 2.2,
     CONF_P1_STDDEV_MIN: 15,
     CONF_POWER_START: 50,
-    CONF_POWER_TOLERANCE: 5,
+    CONF_POWER_TOLERANCE: 15,
     CONF_SLEEP_AFTER: 10,
 }
 
